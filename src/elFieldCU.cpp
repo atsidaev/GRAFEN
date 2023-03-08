@@ -406,10 +406,17 @@ public:
 	void runExample(int argc, char *argv[]) {
 		InputParser inp(argc, argv);
 
-		double ellipEq = 10, ellipPol = 20;
-		int nl = 80, nB = 80, nR = 40;
+		// double ellipEq = 10, ellipPol = 20;
+		// int nl = 30, nB = 80, nR = 1;
+
+		double ellipEq = 10, ellipPol = 10;
+		int nl = 30, nB = 25, nR = 10;
+
 		double K = 2;
+		double K2 = K;
 		double HprimeX = 14, HprimeY = 14, HprimeZ = 35; //~40A/m
+
+		double ellipsoidOuterDistanceY = 1;
 
 		inp.parseIfExists("ellipEq", ellipEq);
 		inp.parseIfExists("ellipPol", ellipPol);
@@ -417,15 +424,17 @@ public:
 		inp.parseIfExists("nB", nB);
 		inp.parseIfExists("nR", nR);
 		inp.parseIfExists("K", K);
+		inp.parseIfExists("K2", K2);
 		inp.parseIfExists("HprimeX", HprimeX);
 		inp.parseIfExists("HprimeY", HprimeY);
 		inp.parseIfExists("HprimeZ", HprimeZ);
+		inp.parseIfExists("d", ellipsoidOuterDistanceY);
 
 		const Ellipsoid e(ellipEq, ellipPol);
 		const Point Hprime = { HprimeX, HprimeY, HprimeZ };
-		const auto I0 = Hprime * K;
 
 		const auto ellipsoidModelGenerator = [&](vector<HexahedronWid> &hsi, vector<double> &Kmodel, vector<Point> &I0out){
+			const auto I0 = Hprime * K;
 			// const auto Ipres = I0 / (1. + K/3.);	// Use known precise I
 			// ellipsoidGen(e, nl, nB, nR, Ipres, hsi);
 			ellipsoidGen(e, nl, nB, nR, I0, hsi);
@@ -433,10 +442,34 @@ public:
 			I0out.assign(hsi.size(), I0);
 		};
 		const auto cubeModelGenerator = [&](vector<HexahedronWid> &hsi, vector<double> &Kmodel, vector<Point> &I0out) {
+			const auto I0 = Hprime * K;
 			cubeGen(Volume{{-10, 10, nl},{-5, 5, nB}, {-5, 5, nR}}, I0, hsi);
 			Kmodel.assign(hsi.size(), K);
 			I0out.assign(hsi.size(), I0);
 		};
+
+		const auto twoEllipsoidsModelGenerator = [&](vector<HexahedronWid> &hsi, vector<double> &Kmodel, vector<Point> &I0out){
+			// Generate first ellipsoid
+			const auto I0_1 = Hprime * K;
+			ellipsoidGen(e, nl, nB, nR, I0_1, hsi);
+			Kmodel.assign(hsi.size(), K);
+			I0out.assign(hsi.size(), I0_1);
+
+			// Generate second ellipsoid
+			vector<HexahedronWid> hsi2;
+			const auto I0_2 = Hprime * K2;
+			ellipsoidGen(e, nl, nB, nR, I0_2, hsi2);
+			// Translate second ellipsoid
+			for(auto &q: hsi)
+				q += Point{e.Req + ellipsoidOuterDistanceY, 0, 0};
+			// Append elements
+			hsi.insert(hsi.end(), hsi2.begin(), hsi2.end());
+			const vector<double> K2_v(hsi2.size(), K2);
+			Kmodel.insert(Kmodel.end(), K2_v.begin(), K2_v.end());
+			const vector<Point> I0_2_v(hsi2.size(), I0_2);
+			I0out.insert(I0out.end(), I0_2_v.begin(), I0_2_v.end());
+		};
+
 		const auto createCudaSolver = [&](const vector<HexahedronWid>& hsi, const bool transpose) {
 			return gFieldSolver::getCUDAsolver(&*hsi.cbegin(), &*hsi.cend(), transpose);
 			// const double replDist = 3;
@@ -445,11 +478,14 @@ public:
 
 		Stopwatch tmr;
 		tmr.start();
-		vector<HexahedronWid> hsi = demagCG<HexahedronWid>(ellipsoidModelGenerator, createCudaSolver);
+		vector<HexahedronWid> hsi = demagCG<HexahedronWid>(twoEllipsoidsModelGenerator, createCudaSolver);
+		hsi.resize(nR*nl*nB*8); // Drop everything after the first ellipsoid
+
 		if(!isRoot()) return;
 		cout << "Total time: " << tmr.stop() << "sec." << endl;
 
 		const int layersN = hsi.size() / (nl*nB*8);
+		Assert(layersN == nR);
 		cout << "Layers: " << layersN << endl;
 
 		// Mean dens for model
@@ -474,6 +510,8 @@ public:
 		for(auto& h: hsi) meanStat.next(h);
 		const Point mean = meanStat.get();
 
+		const auto I0 = Hprime * K;
+		const auto Ipres = magnetization_J_theor_ellipsoid(e, I0, K);
 
 		// RMS dens for model
 		Statistics<Point, double> rmsStat(
@@ -495,24 +533,22 @@ public:
 			for(int layer = 0; layer < layersN; ++layer) 
 				for(int i = 0; i < inSz; ++i) {
 					const int idx = ((part * layersN) + layer) * inSz + i;
-					rmsStatLayers[layer].next(hsi[idx].dens - meanStatLayers[layer].get());
+					rmsStatLayers[layer].next(hsi[idx].dens - Ipres);
 				}
-		for(auto& h: hsi) rmsStat.next(h.dens - mean);
+		for(auto& h: hsi) rmsStat.next(h.dens - Ipres);
 		const double rms = rmsStat.get();
 
 		// Testing, testing 1,2,3...
 
-		const double fieldElipHeight = 1;
-
-		const auto Ipres = magnetization_J_theor_ellipsoid(e, I0, K);
-		cout << "Ellipsoid presice I = " << Ipres << " | rel_err = " << (Ipres-mean).eqNorm()/Ipres.eqNorm()   << " | demag_rel_err = " << (Ipres-I0).eqNorm()/Ipres.eqNorm() << endl;
-		cout << "Jmean= " << mean << " | pres_err= " << (Ipres-mean)/Ipres << " | rms_err= " << rms << endl << endl;
+		cout << "Ellipsoid presice I = " << Ipres  << " | demag_rel_err = " << (Ipres-I0).eqNorm()/Ipres.eqNorm() << endl;
+		cout << "Jmean= " << mean << " | Jmean_err_pres= " << (Ipres-mean)/Ipres << " ~ " << (Ipres-mean).eqNorm()/Ipres.eqNorm() << " | rms_err_pres= " << rms << " ~ " << rms/Ipres.eqNorm() << endl << endl;
 
 		for(int layer = 0; layer < layersN; ++layer) {
 			cout << layer << ": "  << "Jmean= " << meanStatLayers[layer].get() << " | rms_err= " << rmsStatLayers[layer].get() << endl;
 		}
 
-		const Point p0{0, 0, e.Req + fieldElipHeight};
+		// const double fieldElipHeight = 1;
+		// const Point p0{0, 0, e.Req + fieldElipHeight};
 		// cout << "Sphere presice Hsnd_z = " << field_sphere_H_in_Hz(e.Req, Hprime.z, K, p0) << endl;
 		// const Point Hprec = field_sphere_H(e.Req, Ipres, p0) / (4.*M_PI);
 		// cout << "Sphere presice H = " << Hprec << endl;

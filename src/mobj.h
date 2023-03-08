@@ -521,6 +521,13 @@ public:
 		return true;
 	}
 	*/
+
+	Hexahedron& operator+=(const Point& q) {
+		for(auto &pn: p)
+			pn += q;
+		return *this;
+	}
+
 private:
 	//возврещает 1 если у i-го четырехугольника нормаль внешняя, иначе -1
 	static int isExtNorm(const std::vector<Quadrangle> &qrs, const int i) {
