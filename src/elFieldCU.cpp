@@ -367,6 +367,16 @@ double field_sphere_H_in_Hz(const double R, const double Hprim_z, const double K
 	return K / (K+3) * Hprim_z * R*R*R * (2*p0.z*p0.z - p0.x*p0.x - p0.y*p0.y)/dr;
 }
 
+template<typename T, typename TS, typename VAlloc>
+double eqNorm(const vector<T, VAlloc> &v, const std::function<TS(T)> &f) {
+	double sum = 0;
+	for(auto &e: v) {
+		auto t = f(e);
+		sum += t ^ t;
+	}
+	return std::sqrt(sum);
+}
+
 Point magnetization_J_theor_ellipsoid(const Ellipsoid &e, const Point J0, const double K) {
 	if(e.Rpl == e.Req) {	// Sphere
 		return J0 / (1. + K/3.);
@@ -479,7 +489,7 @@ public:
 		Stopwatch tmr;
 		tmr.start();
 		vector<HexahedronWid> hsi = demagCG<HexahedronWid>(twoEllipsoidsModelGenerator, createCudaSolver);
-		hsi.resize(nR*nl*nB*8); // Drop everything after the first ellipsoid
+		hsi.resize(nR*nl*nB*8); // Drop everything from the model except the first ellipsoid
 
 		if(!isRoot()) return;
 		cout << "Total time: " << tmr.stop() << "sec." << endl;
@@ -627,14 +637,14 @@ private:
 	template<typename T>
 	struct CG {
 		const vector<T> &b;
-		const std::function<vector<T>(vector<T>&)> Op;
+		const std::function<vector<T>(const vector<T>&)> Op;
 
 		bool ready = false;
 		vector<T> r;
 		vector<T> z;
 		vector<T> x;
 
-		CG(const vector<T> &b, const vector<T> &x0, const std::function<vector<T>(vector<T>&)> &Op): b(b), x(x0), Op(Op) {}
+		CG(const vector<T> &b, const vector<T> &x0, const std::function<vector<T>(const vector<T>&)> &Op): b(b), x(x0), Op(Op) {}
 
 		// x = ax + by
 		static void ax_plus_by(const double a, vector<T>& x, const double b, const vector<T>& y) {
@@ -672,6 +682,64 @@ private:
 
 	};
 
+	vector<Point> fieldInPoints(
+		const std::unique_ptr<gFieldSolver> &solver,		// Valid on all nodes
+		vector<Point>::const_iterator fieldPointsBegin,
+		vector<Point>::const_iterator fieldPointsEnd,
+		const bool logging = false
+	) {	// result.size() == fieldPointsEnd - fieldPointsBegin
+		const int nodeBatchSize = 1024;
+		vector<Point> fieldPoints(fieldPointsBegin, fieldPointsEnd);
+		vector<Point> field(fieldPoints.size());
+		MPIpool<Point, Point> pool(*this, fieldPoints, field, nodeBatchSize);
+		pool.logging = logging;
+
+		int taskCount = 0;
+		if (!isRoot()) {
+			while (1) {
+				const vector<Point> task = pool.getTask();
+				if (!task.size()) break;
+				if(pool.logging) cout << "Task accepted " << taskCount++ << " size: " << task.size() << endl;
+				vector<Point> result(task.size());
+				const double fieldConst = -(1. / (4. * M_PI));
+				for (int i = 0; i < task.size(); ++i)
+					result[i] = solver->solve(task[i]) * fieldConst;
+				pool.submit(result);
+			}
+		} else {
+			if(pool.logging) cout << "Result gather ok" << endl;
+			return field; // root
+		}
+		return {}; // non-roots
+	}
+
+	template<class ClosedShape>
+	vector<Point> J_inElements(
+		const std::unique_ptr<gFieldSolver> &solver,					// Valid on all nodes
+		typename vector<ClosedShape>::const_iterator fieldPointsBegin,
+		typename vector<ClosedShape>::const_iterator fieldPointsEnd,
+		vector<double>::const_iterator K_inFieldPointsBegin,			// (K_inFieldPointsEnd - K_inFieldPointsBegin) == (fieldPointsEnd - fieldPointsBegin)
+		const bool logging = false
+	) {	// result.size() == fieldPointsEnd - fieldPointsBegin
+		vector<Point> fieldPoints(fieldPointsEnd - fieldPointsBegin);
+		std::transform(fieldPointsBegin, fieldPointsEnd, fieldPoints.begin(), [](const ClosedShape &h) {return h.massCenter();});
+		vector<Point> field = fieldInPoints(solver, fieldPoints.begin(), fieldPoints.end(), logging);
+		std::transform(field.cbegin(), field.cend(), K_inFieldPointsBegin, field.begin(), [](const Point f, const double K) { return f * K; });
+		return field; // return J = K*H
+	}
+
+	template<class ClosedShape>
+	const std::unique_ptr<gFieldSolver> createNodeSolver(
+		const std::function<std::unique_ptr<gFieldSolver>(const vector<ClosedShape>&, const bool)> createCudaSolver,
+		const typename vector<ClosedShape>::const_iterator modelBegin,
+		const typename vector<ClosedShape>::const_iterator modelEnd,
+		const bool transpose = false
+	) {
+		vector<ClosedShape> model(modelBegin, modelEnd);
+		Bcast(model);
+		return createCudaSolver(model, transpose);
+	}
+
 	template<class ClosedShape>
 	vector<ClosedShape> demagCG(
 		const std::function<void(vector<ClosedShape>&, vector<double>&, vector<Point>&)> &modelGenerator,
@@ -681,113 +749,42 @@ private:
 		vector<ClosedShape> hsi;
 		vector<double> K;
 		vector<Point> J0;
-		modelGenerator(hsi, K, J0);
+		if(isRoot()) modelGenerator(hsi, K, J0);
 		if(isRoot()) cout << "Model size: " << hsi.size() << endl;
 		// return hsi;
 
-		//re-calculate J (magnetization) in every ClosedShape (simple iteration)
-		const auto &fJn = [&createCudaSolver, &hsi, &K, &J0, this]() -> vector<Point> {
-			Bcast(hsi);
-			std::unique_ptr<gFieldSolver> solver = createCudaSolver(hsi, false);
-			vector<Point> fieldPoints(hsi.size());
-			std::transform(hsi.cbegin(), hsi.cend(), fieldPoints.begin(), [](const ClosedShape &h) {return h.massCenter();});
-			vector<Point> field(hsi.size());
-			MPIpool<Point, Point> pool(*this, fieldPoints, field, 1024);
-			// pool.logging = true;
-			int cnt = 0;
-			if (!isRoot()) {
-				while (1) {
-					const vector<Point> task = pool.getTask();
-					if (!task.size()) break;
-					if(pool.logging) cout << "Task accepted " << cnt++ << " size: " << task.size() << endl;
-					vector<Point> result(task.size());
-					for (int i = 0; i < task.size(); ++i)
-						result[i] = -solver->solve(task[i]);
-					pool.submit(result);
-				}
-			} else {
-				cout << "result gather ok" << endl;
+		const auto OpCGt = [&hsi, &K, &createCudaSolver, this](const vector<Point> x = {}, const bool transpose = false) -> vector<Point> {
+			const bool logging = false;
+			auto model{ hsi };
+			for(size_t i = 0; i < model.size(); ++i) model[i].dens = x[i];
 
-				for (int i = 0; i < field.size(); ++i) 
-					field[i] = (field[i] / (4.*M_PI)) * K[i] + J0[i];
+			const auto solver = createNodeSolver(createCudaSolver, model.begin(), model.end(), transpose);
+			vector<Point> J = J_inElements<ClosedShape>(solver, model.cbegin(), model.cend(), K.cbegin(), logging);
 
-				Point mean = 0;
-				for (int i = 0; i < field.size(); ++i) 
-					mean += field[i];
-				mean = mean / field.size();
-				cout << "Mean Jn+1= " << mean << endl;
-
-				return field;
-			}
-
-			return {};
-		};
-
-		// Re-calculate J (magnetization) in every ClosedShape (CG)
-		// Should be valid: 'hsi' - all nodes; x - root; result - root
-		const auto OpCGt = [&createCudaSolver, &hsi, &K, &J0, this](vector<Point> x = {}, const bool transpose = false) -> vector<Point> {
-			Bcast(x);
-			auto shapes{ hsi };
-			for (int i = 0; i < shapes.size(); ++i) shapes[i].dens = x[i];
-			const std::unique_ptr<gFieldSolver> solver = createCudaSolver(shapes, transpose);
-			vector<Point> fieldPoints(shapes.size());
-			std::transform(shapes.cbegin(), shapes.cend(), fieldPoints.begin(), [](const ClosedShape &h) {return h.massCenter();});
-			vector<Point> res(shapes.size());
-			MPIpool<Point, Point> pool(*this, fieldPoints, res, 1024);
-			// pool.logging = true;
-			int cnt = 0;
-			if (!isRoot()) {
-				while (1) {
-					const vector<Point> task = pool.getTask();
-					if (!task.size()) break;
-					if(pool.logging) cout << "Task accepted " << cnt++ << " size: " << task.size() << endl;
-					vector<Point> result(task.size());
-					for (int i = 0; i < task.size(); ++i)
-						result[i] = -solver->solve(task[i]);
-					pool.submit(result);
-				}
-			} else {
-				if(pool.logging) cout << "result gather ok" << endl;
-				for (int i = 0; i < res.size(); ++i) 
-					res[i] = x[i] - (res[i] / (4.*M_PI)) * K[i];
-				return res;
-			}
-			return {};
+			std::transform(J.cbegin(), J.cend(), x.cbegin(), J.begin(), [](const Point J, const Point x) { return x - J; });
+			return J; // return x - J
 		};
 
 		vector<Point> x0(hsi.size());
 		std::transform(hsi.cbegin(), hsi.cend(), x0.begin(), [](const ClosedShape &h) {return h.dens;});
 		CG<Point> cg{J0, x0, OpCGt};
-
-		//calculate residual ||res[] - hsi.dens[]|| and copy res[] to hsi.dens[]
-		const auto residualEqAndCopy = [](const vector<Point> &res, vector<ClosedShape> &hsi) {
-			double sum = 0;
-			for (int i = 0; i < res.size(); ++i) {
-				const Point v = res[i] - hsi[i].dens;
-				sum += v^v;
-				hsi[i].dens = res[i];
-			}
-			return sqrt(sum);
-		};
-
-		
 		if(isRoot()) cout << "Demag Solving..." << endl;
 
-		// Not Root will do calculations here
+		// Non-roots will do calculations here
 		if (!isRoot()) {
 			while (1) {
 				bool cont = false;
 				Bcast(cont);
 				if (!cont) break;
-				//fJn();
 				OpCGt();
 			}
 			cout << "Done." << endl;
 			return {};
 		}
+
+		// Root only code path
 		
 		const double eps = 1e-4;
-		const double minRelativeErrChange = 0.05; //5%
 		const int maxIter = 10;
 		double err = 1, prvErr = err*100;
 
@@ -798,166 +795,26 @@ private:
 			cg.prepare();
 		}
 
-		for (int it = 0; it < maxIter && err > eps /* && (fabs(err-prvErr) / err) > minRelativeErrChange && err < prvErr */ ; ++it) {
+		for (int it = 0; it < maxIter && err > eps; ++it) {
 			cout << "Iter: " << it << endl;
 			bool cont = true;
 			Bcast(cont);
-
-			// const vector<Point> In = fJn();
-			// cout << endl;
 			cg.nextIter();
-			
 			prvErr = err;
-			// err = residualEqAndCopy(In, hsi) / [&In]() {
-			// 	double sum = 0;
-			// 	for (auto& i: In)
-			// 		sum += i ^ i;
-			// 	return sqrt(sum);
-			// }();
 			err = cg.getError();
 			
-			const auto ediff = err - prvErr;
-			cout << "Err: " << err << "(" << (ediff>0?"+":"") << ediff << ")" << " at iter: " << it << endl;
+			const auto errDiff = err - prvErr;
+			cout << "Err: " << err << "(" << (errDiff>0?"+":"") << errDiff << ")" << " at iter: " << it << endl;
 		}
 
+		// Stop non-roots
 		bool cont = false;
 		Bcast(cont);
 
+		// Copy updated J back into the model
 		for (int i = 0; i < hsi.size(); ++i) hsi[i].dens = cg.x[i];
 
 		return hsi;
-	}
-
-	template<class ClosedShape>
-	void calcDemag(
-		const std::function<void(vector<ClosedShape>&, vector<double>&, vector<Point>&)> &modelGenerator,
-		const Volume& v,
-		const limits& fieldDimX, const limits& fieldDimY, const double H,
-		const string& filePrefix,
-		const double DPR
-	) {
-		const auto createCudaSolver = [&DPR](const vector<ClosedShape>& hsi, const bool transpose) {
-			return	DPR < 0
-				? gFieldSolver::getCUDAsolver(&*hsi.cbegin(), &*hsi.cend(), transpose)
-				: gFieldSolver::getCUDAreplacingSolver(&*hsi.cbegin(), &*hsi.cend(), DPR, hsi.size())
-			;
-		};
-
-		vector<ClosedShape> hsi = demagCG<ClosedShape>(modelGenerator, createCudaSolver);
-		if(!isRoot()) return;
-
-		const auto &fOnDat = [&](Dat3D<Point> &res) {
-			std::unique_ptr<gFieldSolver> solver = createCudaSolver(hsi, false);
-			for (auto &i : res)
-				i.val = -solver->solve({ i.p.x, i.p.y, i.p.z }) / (4 * M_PI);
-		};
-/*
-		Dat3D<Point> dd("cubeFieldSZ_IN.dat");
-		fOnDat(dd);
-		dd.write("cubeFieldSZ_IN_DESC.dat");
-		return;
-*/
-/*
-		const auto &fInWell = [&v, &well, &fOnDat](const string fname) {
-			Dat3D<Point> dat;
-			for (int i = 1; i < v.z.n; ++i)
-				dat.es.push_back({{ well.center.x, well.center.y, v.z.atWh(i) - v.z.d() / 2.}});
-			fOnDat(dat);
-			dat.write(fname);
-		};
-*/
-
-		//calculate field on a plane of heigh 'H' above model and save to 'fname'_x.dat, 'fname'_y.dat, 'fname'_z.dat
-		const auto &fOn = [&createCudaSolver, &hsi, &H, &fieldDimX, &fieldDimY](const string fname) {
-			Field x{ fieldDimX, fieldDimY }, y{ x }, z{ x };
-			std::unique_ptr<gFieldSolver> solver = createCudaSolver(hsi, false);
-			int pp = -1;
-			for (int i = 0; i < x.y.n; ++i) {
-				for (int j = 0; j < x.x.n; ++j) {
-					const Point p0{ x.x.atWh(j), x.y.atWh(i), H };
-					const Point res = -solver->solve(p0) / (4*M_PI);
-					x.data[i*x.x.n + j] = res.x;
-					y.data[i*x.x.n + j] = res.y;
-					z.data[i*x.x.n + j] = res.z;
-				}
-				const int p = (100 * (i + 1)) / x.y.n;
-				if (p != pp) {
-					pp = p;
-					cout << p << "%" << endl;
-				}
-			}
-			cout << endl;
-			x.toGrid().Write(fname + "_x.grd");
-			y.toGrid().Write(fname + "_y.grd");
-			z.toGrid().Write(fname + "_z.grd");
-		};
-
-
-		const auto expJ = [&hsi, &v](const string& fname, const int layerIdx = 0) {	//dump J (magnetization)
-			Field x{ v.x, v.y }, y{ x }, z{ x };
-			for (int i = 0; i < v.y.n; ++i) {
-				for (int j = 0; j < v.x.n; ++j) {
-					const auto& h = hsi[layerIdx * (v.y.n*v.x.n) + i * v.x.n + j];
-					const Point p0 = h.massCenter();
-					x.data[i*x.x.n + j] = h.dens.x;
-					y.data[i*x.x.n + j] = h.dens.y;
-					z.data[i*x.x.n + j] = h.dens.z;
-				}
-			}
-			x.toGrid().Write(fname + "_x.grd");
-			y.toGrid().Write(fname + "_y.grd");
-			z.toGrid().Write(fname + "_z.grd");
-			//cout << "expJ() done." << endl;
-		};
-		const auto expJall = [&expJ, &v](const string& fname) {
-			for(int zi = 0; zi < v.z.n; ++zi)
-				expJ(fname + "_" + std::to_string(zi), zi);	
-		};
-
-
-
-		const auto expJdiff = [&expJall, &v](const string& filePrefix) {
-			expJall("Jn/" + filePrefix + "Jn");
-
-			const auto gridDiff3d = [](const string& base1, const string& base2, const string& baseDest) {
-				const auto diff1d = [&](const string& axis) {
-					Grid t(base1 + "_" + axis + ".grd");
-					auto gdiff = t - Grid(base2 + "_" + axis + ".grd");
-					gdiff.Write(baseDest + "_" + axis + ".grd");
-					return std::make_tuple(gdiff.mean(), gdiff.sumOfCubes(), t.sumOfCubes());
-				};
-				const auto x = diff1d("x"), y = diff1d("y"), z = diff1d("z");
-				return std::make_tuple( 
-					Point{ std::get<0>(x), std::get<0>(y), std::get<0>(z) }, //mean
-					std::get<1>(x) + std::get<1>(y) + std::get<1>(z), // sum of cubes for diff
-					std::get<2>(x) + std::get<2>(y) + std::get<2>(z) // sum of cubes for total
-				);
-			};
-
-			Point mean;
-			double sumOfCubesDiff = 0;
-			double sumOfCubesTotal = 0;
-			for(int zi = 0; zi < v.z.n; ++zi) {
-				const auto gr = gridDiff3d(
-					"Jn/" + filePrefix + "Jn" + "_" + std::to_string(zi), 
-					"J0/" + filePrefix + "J0" + "_" + std::to_string(zi), 
-					"Jn_J0_diff/" + filePrefix + "Jn_J0_diff" + "_" + std::to_string(zi)
-				);
-				mean += std::get<0>(gr);
-				sumOfCubesDiff += std::get<1>(gr);
-				sumOfCubesTotal += std::get<2>(gr);
-			}
-			return std::make_tuple( mean, sumOfCubesDiff, sumOfCubesTotal );
-		};
-
-		const auto JdiffRes = expJdiff(filePrefix);
-		cout << "Mean Jn-J0 = " << std::get<0>(JdiffRes) << endl;
-		cout << "|Jn-J0|/|Jn| = " << std::sqrt(std::get<1>(JdiffRes)) / std::sqrt(std::get<2>(JdiffRes)) << endl;
-		fOn(filePrefix + "Field");
-		//fInWell("inWell.dat");
-
-
-		cout << "Master Done." << endl;
 	}
 };
 
