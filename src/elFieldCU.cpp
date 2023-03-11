@@ -368,8 +368,8 @@ double field_sphere_H_in_Hz(const double R, const double Hprim_z, const double K
 	return K / (K+3) * Hprim_z * R*R*R * (2*p0.z*p0.z - p0.x*p0.x - p0.y*p0.y)/dr;
 }
 
-template<typename T, typename TS, typename VAlloc>
-double eqNorm(const vector<T, VAlloc> &v, const std::function<TS(T)> &f) {
+template<typename T, typename TS>
+double eqNorm(const vector<T> &v, const std::function<TS(const T&)> &f) {
 	double sum = 0;
 	for(auto &e: v) {
 		auto t = f(e);
@@ -435,6 +435,7 @@ public:
 		inp.parseIfExists("nB", nB);
 		inp.parseIfExists("nR", nR);
 		inp.parseIfExists("K", K);
+		K2 = K;
 		inp.parseIfExists("K2", K2);
 		inp.parseIfExists("HprimeX", HprimeX);
 		inp.parseIfExists("HprimeY", HprimeY);
@@ -490,10 +491,27 @@ public:
 		Stopwatch tmr;
 		tmr.start();
 		vector<HexahedronWid> hsi = demagCG<HexahedronWid>(twoEllipsoidsModelGenerator, createCudaSolver);
-		hsi.resize(nR*nl*nB*8); // Drop everything from the model except the first ellipsoid
+
+		// Calculate the effect of the rest of the model on the first ellipsoid
+		const int firstEllipsoidElementsN = isRoot()? nR * nl * nB * 8 : 0;
+		{
+			vector<HexahedronWid> firstEllipsoid(hsi.cbegin(), hsi.cbegin() + firstEllipsoidElementsN);
+			vector<HexahedronWid> restModel(hsi.cbegin() + firstEllipsoidElementsN, hsi.cend());
+			const auto solver = createNodeSolver<HexahedronWid>(createCudaSolver, restModel.cbegin(), restModel.cend());
+			const vector<double> K_firstEllipsoid(firstEllipsoid.size(), K);
+			vector<Point> J = J_inElements<HexahedronWid>(solver, firstEllipsoid.cbegin(), firstEllipsoid.cend(), K_firstEllipsoid.cbegin());
+
+			const double JeffectNorm = eqNorm<Point, Point>(J, [](auto &v){ return v; });
+			const double JselfNorm = eqNorm<HexahedronWid, Point>(firstEllipsoid, [](auto &e){ return e.dens; });
+
+			if(isRoot()) cout << "Rest model Effect: " << JeffectNorm / JselfNorm << endl;
+		}
+
 
 		if(!isRoot()) return;
 		cout << "Total time: " << tmr.stop() << "sec." << endl;
+
+		hsi.resize(firstEllipsoidElementsN); // Drop everything from the model except the first ellipsoid
 
 		const int layersN = hsi.size() / (nl*nB*8);
 		Assert(layersN == nR);
