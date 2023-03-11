@@ -17,13 +17,14 @@
 #include "Quadrangles.h"
 #include "MPIwrapper.h"
 #include "MPIpool.h"
+#include "CG.h"
+#include "AssertException.h"
 
 using std::string;
 using std::vector;
 using std::cout;
 using std::endl;
 
-#define Assert(exp) do { if (!(exp)) throw std::runtime_error("Assertion failed at: " + string(__FILE__) + " # line " + string(std::to_string(__LINE__))); } while (0)
 
 //get amount of quadrangles for nx*ny*nz discretization
 int getQdAm(const int nx, const int ny, const int nz) {
@@ -634,53 +635,6 @@ public:
 	}
 
 private:
-	template<typename T>
-	struct CG {
-		const vector<T> &b;
-		const std::function<vector<T>(const vector<T>&)> Op;
-
-		bool ready = false;
-		vector<T> r;
-		vector<T> z;
-		vector<T> x;
-
-		CG(const vector<T> &b, const vector<T> &x0, const std::function<vector<T>(const vector<T>&)> &Op): b(b), x(x0), Op(Op) {}
-
-		// x = ax + by
-		static void ax_plus_by(const double a, vector<T>& x, const double b, const vector<T>& y) {
-			std::transform(x.cbegin(), x.cend(), y.cbegin(), x.begin(), [&a, &b](const auto& x, const auto &y){ return x*a + y*b; });
-		}
-		static double dot(const vector<T>& a, const vector<T>& b) {
-			return std::transform_reduce(a.cbegin(), a.cend(), b.cbegin(), 0., 
-				[](const auto& a, const auto& b){ return a + b; }, 
-				[](const auto& a, const auto& b){ return a ^ b; }
-			);
-		}
-
-		double getError() const {
-			return sqrt(dot(r, r) / dot(b, b));
-		}
-
-		void prepare() {
-			r = Op(x);	//r0 = Ax
-			Assert(x.size() == r.size());
-			ax_plus_by(-1, r, 1, b); //r0 = b - Ax
-			z = r;
-			ready = true;
-		}
-
-		void nextIter() {
-			if(!ready) throw std::runtime_error("CG: call prepare() before iter()");
-			const auto Az = Op(z);
-			const double r_dot = dot(r, r);
-			const double alpha = r_dot / dot(Az, z);
-			ax_plus_by(1, x, alpha, z); 		// x = x_prv + alpha*z_prv
-			ax_plus_by(1, r, -alpha, Az);		// r = r_prv - alpha*Az_prv
-			const double beta = dot(r, r) / r_dot;
-			ax_plus_by(beta, z, 1, r);  		// z = r + beta*z_prv
-		}
-
-	};
 
 	vector<Point> fieldInPoints(
 		const std::unique_ptr<gFieldSolver> &solver,		// Valid on all nodes
