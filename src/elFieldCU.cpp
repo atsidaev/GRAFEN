@@ -299,13 +299,22 @@ double field_sphere_H_in_Hz(const double R, const double Hprim_z, const double K
 }
 
 template<typename T, typename TS>
-double eqNorm(const vector<T> &v, const std::function<TS(const T&)> &f) {
+double eqNorm(const vector<T> &v, const std::function<TS(const T&)> &f = [](auto &v){ return v; }) {
 	double sum = 0;
 	for(auto &e: v) {
 		auto t = f(e);
 		sum += t ^ t;
 	}
 	return std::sqrt(sum);
+}
+
+void dumpJ_asVectorField(const vector<HexahedronWid> &hsi, const string &fname, const std::function<Point(const Point&)> &f = [](auto &v){ return v; }) {
+	Dat3D<Point> dd;
+	for(int i = 0; i < hsi.size(); ++i) {
+		const auto c = hsi[i].massCenter();
+		dd.es.push_back({{c.x, c.y, c.z}, f(hsi[i].dens)});
+	}
+	dd.write(fname);
 }
 
 Point magnetization_J_theor_ellipsoid(const Ellipsoid &e, const Point J0, const double K) {
@@ -401,8 +410,8 @@ public:
 			const auto I0_2 = Hprime * K2;
 			ellipsoidGen(e, nl, nB, nR, I0_2, hsi2);
 			// Translate second ellipsoid
-			for(auto &q: hsi)
-				q += Point{e.Req + ellipsoidOuterDistanceY, 0, 0};
+			for(auto &q: hsi2)
+				q += Point{e.Req * 2 + ellipsoidOuterDistanceY, 0, 0};
 			// Append elements
 			hsi.insert(hsi.end(), hsi2.begin(), hsi2.end());
 			const vector<double> K2_v(hsi2.size(), K2);
@@ -430,7 +439,7 @@ public:
 			const vector<double> K_firstEllipsoid(firstEllipsoid.size(), K);
 			vector<Point> J = J_inElements<HexahedronWid>(solver, firstEllipsoid.cbegin(), firstEllipsoid.cend(), K_firstEllipsoid.cbegin());
 
-			const double JeffectNorm = eqNorm<Point, Point>(J, [](auto &v){ return v; });
+			const double JeffectNorm = eqNorm<Point, Point>(J);
 			const double JselfNorm = eqNorm<HexahedronWid, Point>(firstEllipsoid, [](auto &e){ return e.dens; });
 
 			if(isRoot()) cout << "Rest model Effect: " << JeffectNorm / JselfNorm << endl;
@@ -439,6 +448,8 @@ public:
 
 		if(!isRoot()) return;
 		cout << "Total time: " << tmr.stop() << "sec." << endl;
+
+		dumpJ_asVectorField(hsi, "two_balls_Jsnd.dat", [&Hprime, &K](const Point& j) { return j - Hprime * K; });
 
 		hsi.resize(firstEllipsoidElementsN); // Drop everything from the model except the first ellipsoid
 
@@ -503,81 +514,6 @@ public:
 
 		for(int layer = 0; layer < layersN; ++layer) {
 			cout << layer << ": "  << "Jmean= " << meanStatLayers[layer].get() << " | rms_err= " << rmsStatLayers[layer].get() << endl;
-		}
-
-		// const double fieldElipHeight = 1;
-		// const Point p0{0, 0, e.Req + fieldElipHeight};
-		// cout << "Sphere presice Hsnd_z = " << field_sphere_H_in_Hz(e.Req, Hprime.z, K, p0) << endl;
-		// const Point Hprec = field_sphere_H(e.Req, Ipres, p0) / (4.*M_PI);
-		// cout << "Sphere presice H = " << Hprec << endl;
-		// const Point noDemagHprec = field_sphere_H(e.Req, I0, p0) / (4.*M_PI);
-		// cout << "Sphere presice H (no demag) = " << noDemagHprec  << " | rel_err = " << (Hprec-noDemagHprec).eqNorm()/Hprec.eqNorm() << endl;
-
-
-		// {
-		// 	Dat3D<Point> dd;
-		// 	dd.es.resize(hsi.size());
-		// 	std::transform(hsi.cbegin(), hsi.cend(), dd.es.begin(), [](const HexahedronWid &h) -> Dat3D<Point>::Element {
-		// 		const auto p = h.massCenter();
-		// 		return {{p.x, p.y, p.z}, h.dens};
-		// 	});
-		// 	dd.write("elip_J_int.dat");
-		// }
-
-		const auto solver = createCudaSolver(hsi, false);
-
-
-		const auto &fOnDat = [&](Dat3D<Point> &res) {
-			for (auto &i : res) 
-				i.val = -solver->solve({ i.p.x, i.p.y, i.p.z }) / (4 * M_PI);
-		};
-
-		// {
-		// 	Dat3D<Point> dd;
-		// 	const double t = 0.001;
-		// 	for (double x = -15-t; x < 15; x += 0.2)
-		// 		for (double y = -15-t; y < 15; y += 0.2)
-		// 			dd.es.push_back({{ x, y, e.Req/2 + t}});
-		// 	fOnDat(dd);
-		// 	dd.write("elip_f_in_out_no_J3.dat");
-		// 	return;
-		// }
-
-		// {
-		// 	Dat3D<Point> dd;
-		// 	const double t = 0.007;
-		// 	for (double x = -15-t; x < 15; x += 0.2)
-		// 		for (double y = -15-t; y < 15; y += 0.2)
-		// 			dd.es.push_back({{ x, y, e.Req/2 + t}});
-
-		// 	fOnDat(dd);
-		// 	dd.write("cube_f_in_out.dat");
-
-		// 	for(auto &el: dd.es) el.p.z = e.Req + 1;
-		// 	fOnDat(dd);
-		// 	dd.write("cube_f_out.dat");
-		// }
-
-		// {
-		// 	Dat3D<Point> dd;
-		// 	for(int part = 0; part < 4; ++part)
-		// 		for(int layer = 0; layer < layersN; ++layer) 
-		// 			for(int li = 0; li < nl; ++li) {
-		// 				const int Bi = 0;
-		// 				const int idx = ((part * layersN) + layer) * inSz + (li * nB) + Bi;
-		// 				const auto c = hsi[idx].massCenter();
-		// 				dd.es.push_back({{c.x, c.y, c.z}, hsi[idx].dens});
-		// 			}
-		// 	dd.write("elip_J_in.dat");
-		// }
-		
-		{
-			Dat3D<Point> dd;
-			for(int i = 0; i < hsi.size(); ++i) {
-				const auto c = hsi[i].massCenter();
-				dd.es.push_back({{c.x, c.y, c.z}, hsi[i].dens});
-			}
-			dd.write("ball_J_all_in.dat");
 		}
 	}
 
