@@ -240,42 +240,6 @@ void ellipsoidGen(const Ellipsoid &e, const int nl, const int nB, const int nR, 
 	dbl([](Hexahedron& h){ h.mirrorZ(); });
 }
 
-template <class VAlloc>
-void makeCloud(const vector<HexahedronWid, VAlloc> &hsi, const string datFname) {
-	Dat2D<> dat;
-	for (const auto& h : hsi)
-		if(h.dens.x != 0)
-			for (const auto& p : h.p)
-				dat.es.push_back({ {p.x, p.y}, p.z });
-	dat.write(datFname);
-}
-
-template <class VAlloc>
-void makeBln(const vector<HexahedronWid, VAlloc> &hsi, const string datFname, const bool isIn = false) {
-	Dat2D<> dat;
-	for (const auto& h : hsi)
-		if (isIn? (h.dens.x == 0) : (h.dens.x != 0)) {
-			/*
-			dat.es.push_back({ { 5, 0 }, 0 });
-			dat.es.push_back({ { h.p[0].x, h.p[0].y }, 0 });
-			dat.es.push_back({ { h.p[1].x, h.p[1].y }, 0 });
-			dat.es.push_back({ { h.p[3].x, h.p[3].y }, 0 });
-			dat.es.push_back({ { h.p[2].x, h.p[2].y }, 0 });
-			dat.es.push_back({ { h.p[0].x, h.p[0].y }, 0 });
-			*/
-			for (int i = 0; i < 2; ++i) {
-				const auto t = h.getTri(i);
-				//const Triangle t = h.getTri(i);
-				dat.es.push_back({ { 4, 0 }, 0 });
-				dat.es.push_back({ { t.p1.x, t.p1.y }, 0 });
-				dat.es.push_back({ { t.p2.x, t.p2.y }, 0 });
-				dat.es.push_back({ { t.p3.x, t.p3.y }, 0 });
-				dat.es.push_back({ { t.p1.x, t.p1.y }, 0 });
-			}
-		}
-	dat.write(datFname);
-}
-
 class VolumeMod : public Volume {
 public:
 	template<typename... Args>
@@ -290,40 +254,6 @@ public:
 				}
 	}
 };
-
-Point intHexTr__(const Point &p0, const HexahedronWid &h);
-
-void hexTest() {
-	// Hexahedron h({
-	// 	{ 20, 20, 0 },{ 20, -20, 0 },{ -20, 20, 0 },{ -20, -20, 0 },
-	// 	{ 20, 20, -4 },{ 20, -20, -4 },{ -20, 20, -4 },{ -20, -20, -4 }
-	// }, Point{ 14, 14, 35 }*0.2);
-
-	Hexahedron h({
-		{ 2, 1, 0 },{ 2, -1, 0 },{ -2, 1, 0 },{ -2, -1, 0 },
-		{ 2, 1, -2 },{ 2, -1, -2 },{ -2, 1, -2 },{ -2, -1, -2 }
-	}, Point{ 14, 14, 35 }*0.02);
-
-	auto hw = HexahedronWid(h);
-	const double H = -0.25;
-
-
-	cout << "Solving..." << endl;
-	Dat3D<Point> dat;
-	auto l = limits{ -25 + 0.00001, 25 + 0.00001, 40 };
-	for (double i = 0; i < l.n; ++i) {
-		for (int j = 0; j < l.n; ++j) {
-			const Point p0{ l.atWh(j), l.atWh(i), H };
-			const Point res = (-intHexTr__(p0, hw)
-					 + (hw.isIn(p0)? hw.dens * (4.*M_PI / 3.) : Point())
-				) / (4 * M_PI);
-			dat.es.push_back({ { p0.x, p0.y, p0.z }, res });
-		}
-	}
-	
-	dat.write("cubeFieldSZ_IN.dat");
-	cout << "Done." << endl;
-}
 
 template<class Input = double, class Acc = Input, class Result = Acc>
 class Statistics {
@@ -434,8 +364,7 @@ public:
 		inp.parseIfExists("nl", nl);
 		inp.parseIfExists("nB", nB);
 		inp.parseIfExists("nR", nR);
-		inp.parseIfExists("K", K);
-		K2 = K;
+		inp.parseIfExists("K", K); K2 = K;
 		inp.parseIfExists("K2", K2);
 		inp.parseIfExists("HprimeX", HprimeX);
 		inp.parseIfExists("HprimeY", HprimeY);
