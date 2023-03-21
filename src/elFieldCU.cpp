@@ -280,6 +280,19 @@ public:
 		acc = init;
 		count = 0;
 	}
+	template<typename Iterable>
+	void next(const Iterable& arr) {
+		for(const auto& v: arr)
+			next(v);
+	}
+};
+
+struct RMSPoint : public Statistics<Point, double> {
+	RMSPoint() : Statistics<Point, double>(
+		0,
+		[&](auto& diff, auto& acc){ return acc + (diff^diff); },
+		[](auto& acc, auto count){ return std::sqrt(acc / count); }
+	) {}
 };
 
 Point field_sphere_H(const double R, const Point J, const Point p) {
@@ -308,11 +321,12 @@ double eqNorm(const vector<T> &v, const std::function<TS(const T&)> &f = [](auto
 	return std::sqrt(sum);
 }
 
-void dumpJ_asVectorField(const vector<HexahedronWid> &hsi, const string &fname, const std::function<Point(const Point&)> &f = [](auto &v){ return v; }) {
+template<typename T>
+void dumpVectorField(const vector<T> &data, const string &fname, const std::function<Point(const T&, const size_t idx)> &point = [](auto &v, auto&){ return v; }, const std::function<Point(const T&, const size_t idx)> &value = [](auto &v, auto&){ return v; }) {
 	Dat3D<Point> dd;
-	for(int i = 0; i < hsi.size(); ++i) {
-		const auto c = hsi[i].massCenter();
-		dd.es.push_back({{c.x, c.y, c.z}, f(hsi[i].dens)});
+	for(size_t i = 0; i < data.size(); ++i) {
+		const auto c = point(data[i], i);
+		dd.es.push_back({{c.x, c.y, c.z}, value(data[i], i)});
 	}
 	dd.write(fname);
 }
@@ -442,16 +456,33 @@ public:
 			const double JeffectNorm = eqNorm<Point, Point>(J);
 			const double JselfNorm = eqNorm<HexahedronWid, Point>(firstEllipsoid, [](auto &e){ return e.dens; });
 
-			if(isRoot()) cout << "Rest model Effect: " << JeffectNorm / JselfNorm << endl;
+			if(isRoot()) cout << "Rest model relative Effect: " << JeffectNorm / JselfNorm << endl;
+			
+			RMSPoint rmsStat;
+			rmsStat.next(J);
+			if(isRoot()) cout << "Rest model Effect RMS: " << rmsStat.get() << endl;
+
+			dumpVectorField<HexahedronWid>(
+				firstEllipsoid,
+				"effect_on_first_ball.dat",
+				[](const HexahedronWid& e, const size_t) { return e.massCenter(); },
+				[&J](const HexahedronWid&, const size_t idx) { return J[idx]; }
+			);
 		}
 
 
 		if(!isRoot()) return;
 		cout << "Total time: " << tmr.stop() << "sec." << endl;
 
-		dumpJ_asVectorField(hsi, "two_balls_Jsnd.dat", [&Hprime, &K](const Point& j) { return j - Hprime * K; });
+		// dumpJ_asVectorField(hsi, "two_balls_Jsnd.dat", [&Hprime, &K](const Point& j, const size_t) { return j - Hprime * K; });
 
 		hsi.resize(firstEllipsoidElementsN); // Drop everything from the model except the first ellipsoid
+
+		{
+			RMSPoint rmsStat;
+			for(const auto& h: hsi) rmsStat.next(h.dens - Hprime * K);
+			if(isRoot()) cout << "Second Ball without I_prm RMS: " << rmsStat.get() << endl;
+		}
 
 		const int layersN = hsi.size() / (nl*nB*8);
 		Assert(layersN == nR);
@@ -483,21 +514,9 @@ public:
 		const auto Ipres = magnetization_J_theor_ellipsoid(e, I0, K);
 
 		// RMS dens for model
-		Statistics<Point, double> rmsStat(
-			0,
-			[&](auto& diff, auto& acc){
-				return acc + (diff^diff); 
-			},
-			[](auto& acc, auto count){ return std::sqrt(acc / count); }
-		);
+		RMSPoint rmsStat;
 		// RMS dens by layer
-		std::vector rmsStatLayers(layersN, Statistics<Point, double>(
-			0,
-			[&](auto& diff, auto& acc){
-				return acc + (diff^diff); 
-			},
-			[](auto& acc, auto count){ return std::sqrt(acc / count); }
-		));
+		std::vector rmsStatLayers(layersN, RMSPoint());
 		for(int part = 0; part < 8; ++part)
 			for(int layer = 0; layer < layersN; ++layer) 
 				for(int i = 0; i < inSz; ++i) {
