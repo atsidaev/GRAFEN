@@ -293,6 +293,12 @@ struct RMSPoint : public Statistics<Point, double> {
 		[&](auto& diff, auto& acc){ return acc + (diff^diff); },
 		[](auto& acc, auto count){ return std::sqrt(acc / count); }
 	) {}
+	template<typename Iterable>
+	static Point calc(const Iterable& arr) {
+		RMSPoint stat;
+		stat.next(arr);
+		return stat.get();
+	}
 };
 
 Point field_sphere_H(const double R, const Point J, const Point p) {
@@ -380,7 +386,7 @@ public:
 		double K2 = K;
 		double HprimeX = 14, HprimeY = 14, HprimeZ = 35; //~40A/m
 
-		double ellipsoidOuterDistanceY = 1;
+		// double ellipsoidOuterDistanceY = 1;
 
 		inp.parseIfExists("ellipEq", ellipEq);
 		inp.parseIfExists("ellipPol", ellipPol);
@@ -392,7 +398,7 @@ public:
 		inp.parseIfExists("HprimeX", HprimeX);
 		inp.parseIfExists("HprimeY", HprimeY);
 		inp.parseIfExists("HprimeZ", HprimeZ);
-		inp.parseIfExists("d", ellipsoidOuterDistanceY);
+		// inp.parseIfExists("d", ellipsoidOuterDistanceY);
 
 		const Ellipsoid e(ellipEq, ellipPol);
 		const Point Hprime = { HprimeX, HprimeY, HprimeZ };
@@ -425,7 +431,7 @@ public:
 			ellipsoidGen(e, nl, nB, nR, I0_2, hsi2);
 			// Translate second ellipsoid
 			for(auto &q: hsi2)
-				q += Point{e.Req * 2 + ellipsoidOuterDistanceY, 0, 0};
+				q += Point{e.Req * 0.5, 0, e.Req * 2 * 1.1};
 			// Append elements
 			hsi.insert(hsi.end(), hsi2.begin(), hsi2.end());
 			const vector<double> K2_v(hsi2.size(), K2);
@@ -444,31 +450,42 @@ public:
 		tmr.start();
 		vector<HexahedronWid> hsi = demagCG<HexahedronWid>(twoEllipsoidsModelGenerator, createCudaSolver);
 
-		// Calculate the effect of the rest of the model on the first ellipsoid
-		const int firstEllipsoidElementsN = isRoot()? nR * nl * nB * 8 : 0;
-		{
-			vector<HexahedronWid> firstEllipsoid(hsi.cbegin(), hsi.cbegin() + firstEllipsoidElementsN);
-			vector<HexahedronWid> restModel(hsi.cbegin() + firstEllipsoidElementsN, hsi.cend());
+		// Dump secondary magnetization
+		dumpVectorField<HexahedronWid>(
+			hsi,
+			"two_balls_Jsnd.dat",
+			[](const HexahedronWid& e, const size_t) { return e.massCenter(); },
+			[&](const HexahedronWid& e, const size_t) { return e.dens - Hprime * K; }
+		);
+
+		const auto& calcAndDumpEffectOnBody = [&hsi, &createCudaSolver, this](size_t bodyBeginIdx, size_t bodyEndIdx, const double bodyK, const string& objectName) {
+			if(!isRoot()) bodyBeginIdx = bodyEndIdx = 0;
+			vector<HexahedronWid> restModel(hsi.cbegin(), hsi.cbegin() + bodyBeginIdx);
+			vector<HexahedronWid> targetBody(hsi.cbegin() + bodyBeginIdx, hsi.cbegin() + bodyEndIdx);
+			restModel.insert(restModel.cbegin(), hsi.cbegin() + bodyEndIdx, hsi.cend());
+
 			const auto solver = createNodeSolver<HexahedronWid>(createCudaSolver, restModel.cbegin(), restModel.cend());
-			const vector<double> K_firstEllipsoid(firstEllipsoid.size(), K);
-			vector<Point> J = J_inElements<HexahedronWid>(solver, firstEllipsoid.cbegin(), firstEllipsoid.cend(), K_firstEllipsoid.cbegin());
+			const vector<double> K_targetBody(targetBody.size(), bodyK);
+			vector<Point> J = J_inElements<HexahedronWid>(solver, targetBody.cbegin(), targetBody.cend(), K_targetBody.cbegin());
 
 			const double JeffectNorm = eqNorm<Point, Point>(J);
-			const double JselfNorm = eqNorm<HexahedronWid, Point>(firstEllipsoid, [](auto &e){ return e.dens; });
+			const double JselfNorm = eqNorm<HexahedronWid, Point>(targetBody, [](auto &e){ return e.dens; });
 
-			if(isRoot()) cout << "Rest model relative Effect: " << JeffectNorm / JselfNorm << endl;
-			
-			RMSPoint rmsStat;
-			rmsStat.next(J);
-			if(isRoot()) cout << "Rest model Effect RMS: " << rmsStat.get() << endl;
+			if(isRoot()) cout << "Rest model relative Effect (on " << objectName << ") : " << JeffectNorm / JselfNorm << endl;
+			if(isRoot()) cout << "Rest model Effect RMS (on " << objectName << ") : " << RMSPoint::calc(J) << endl;
 
 			dumpVectorField<HexahedronWid>(
-				firstEllipsoid,
-				"effect_on_first_ball.dat",
+				targetBody,
+				"effect_on_" + objectName + ".dat",
 				[](const HexahedronWid& e, const size_t) { return e.massCenter(); },
 				[&J](const HexahedronWid&, const size_t idx) { return J[idx]; }
 			);
-		}
+		};
+
+		// Calculate the effect of the rest of the model on the first ellipsoid
+		const int firstEllipsoidElementsN = isRoot()? nR * nl * nB * 8 : 0;
+		calcAndDumpEffectOnBody(0, firstEllipsoidElementsN, K, "first_ball");
+		calcAndDumpEffectOnBody(firstEllipsoidElementsN, hsi.size(), K2, "second_ball");
 
 
 		if(!isRoot()) return;
