@@ -439,6 +439,25 @@ public:
 			const vector<Point> I0_2_v(hsi2.size(), I0_2);
 			I0out.insert(I0out.end(), I0_2_v.begin(), I0_2_v.end());
 		};
+		const auto twoCuboidsModelGenerator = [&](vector<HexahedronWid> &hsi, vector<double> &Kmodel, vector<Point> &I0out){
+			// Generate first body
+			const auto I0_1 = Hprime * K;
+			cubeGen(Volume{{-10, 10, nl*2},{-5, 5, nB*2}, {-5, 5, nR*2}}, I0_1, hsi);
+			Kmodel.assign(hsi.size(), K);
+			I0out.assign(hsi.size(), I0_1);
+
+			// Generate second body
+			vector<HexahedronWid> hsi2;
+			const auto I0_2 = Hprime * K2;
+			cubeGen(Volume{{0, 20, nl*2},{-5, 5, nB*2}, {-17, -7, nR*2}}, I0_2, hsi2);
+
+			// Append elements
+			hsi.insert(hsi.end(), hsi2.begin(), hsi2.end());
+			const vector<double> K2_v(hsi2.size(), K2);
+			Kmodel.insert(Kmodel.end(), K2_v.begin(), K2_v.end());
+			const vector<Point> I0_2_v(hsi2.size(), I0_2);
+			I0out.insert(I0out.end(), I0_2_v.begin(), I0_2_v.end());
+		};
 
 		const auto createCudaSolver = [&](const vector<HexahedronWid>& hsi, const bool transpose) {
 			return gFieldSolver::getCUDAsolver(&*hsi.cbegin(), &*hsi.cend(), transpose);
@@ -448,7 +467,7 @@ public:
 
 		Stopwatch tmr;
 		tmr.start();
-		vector<HexahedronWid> hsi = demagCG<HexahedronWid>(twoEllipsoidsModelGenerator, createCudaSolver);
+		vector<HexahedronWid> hsi = demagCG<HexahedronWid>(twoCuboidsModelGenerator, createCudaSolver);
 
 		// Dump secondary magnetization
 		dumpVectorField<HexahedronWid>(
