@@ -9,6 +9,7 @@
 #define INPUTPARSER_H_
 
 
+#include <set>
 #include <map>
 #include <string>
 #include <sstream>
@@ -58,7 +59,7 @@ public:
 	}
 
 	template<typename T>
-	bool parseIfExists(const std::string &key, T& val) {
+	bool parseIfExists(const std::string &key, T& val) const {
 		if(exists(key)) {
 			(*this)[key] >> val;
 			return true;
@@ -70,8 +71,14 @@ public:
 		return inp;
 	}
 
+	void checkUnknownParams(const std::set<std::string> known) const {
+		for (const auto &x: inp)
+			if(known.find(x.first) == known.end())
+				throw std::runtime_error("InputParser: unknown option \"" + x.first + "\"");
+	}
+
 private:
-	std::map<std::string,std::string> inp;
+	std::map<std::string, std::string> inp;
 
 	bool isNumber(const std::string& s) {
 	    char* p;

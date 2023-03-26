@@ -62,6 +62,11 @@ struct limits {
 	CUDA_HOST_DEV_FUN int indu(const double v) const {
 		return (int)ceil(indR(v));
 	}
+	CUDA_HOST_DEV_FUN limits& operator+=(const double v) {
+		lower += v;
+		upper += v;
+		return *this;
+	}
 private:
 	CUDA_HOST_DEV_FUN double indR(const double v) const {
 		if (v > upper) return n;
@@ -719,6 +724,12 @@ public:
 	limits x;
 	limits y;
 	limits z;
+	Volume& operator+=(const Point& p) {
+		x += p.x;
+		y += p.y;
+		z += p.z;
+		return *this;
+	}
 };
 
 class SubCube : public Volume {
