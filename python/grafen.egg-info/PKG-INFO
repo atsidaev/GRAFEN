@@ -1,0 +1,30 @@
+Metadata-Version: 2.4
+Name: grafen
+Version: 0.1.0
+Summary: Python port of GRAFEN: magnetic forward modelling with self-demagnetization
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.24
+Requires-Dist: numba>=0.57
+Provides-Extra: test
+Requires-Dist: pytest>=7.0; extra == "test"
+
+# GRAFEN (Python)
+
+Forward magnetic modelling with self-demagnetization — Python port of the C++/GPU GRAFEN solver.
+
+## Install
+
+```bash
+cd python
+pip install -e ".[test]"
+```
+
+## Run tests
+
+```bash
+cd python
+pytest -q
+```
+
+Tests compare numerical results to closed-form references for a sphere, two spheres, an ellipsoid, a cube, and two cubes.
