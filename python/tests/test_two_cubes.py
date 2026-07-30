@@ -9,7 +9,7 @@ from grafen.demag import solve_demagnetization
 from grafen.field import field_at_points
 from grafen.mesh import cube_mesh, merge_meshes, translate_mesh
 
-from .conftest import mean_magnetization, relative_rms
+from .conftest import check_relative_rms, mean_magnetization
 
 
 H_PRIME = np.array([14.0, 14.0, 35.0])
@@ -42,7 +42,7 @@ def test_two_cubes_uniform_field_is_superposition():
         (B1[2][0] + OFFSET[2], B1[2][1] + OFFSET[2]),
     )
     h_ana = cuboid_field_uniform(B1, i0, pts) + cuboid_field_uniform(b2, i0, pts)
-    assert relative_rms(h_num, h_ana) < 1e-3
+    check_relative_rms(h_num, h_ana, 1e-3, "two cubes field vs analytic")
 
 
 def test_two_cubes_far_demag_nearly_independent():
@@ -57,5 +57,15 @@ def test_two_cubes_far_demag_nearly_independent():
     i_pair = solve_demagnetization(corners, K, dens0, tol=1e-3, max_iter=15)
 
     n1 = c1.shape[0]
-    assert relative_rms(mean_magnetization(i_pair[:n1]), mean_magnetization(i_single)) < 0.05
-    assert relative_rms(mean_magnetization(i_pair[n1:]), mean_magnetization(i_single)) < 0.05
+    check_relative_rms(
+        mean_magnetization(i_pair[:n1]),
+        mean_magnetization(i_single),
+        0.05,
+        "two cubes I1 vs single",
+    )
+    check_relative_rms(
+        mean_magnetization(i_pair[n1:]),
+        mean_magnetization(i_single),
+        0.05,
+        "two cubes I2 vs single",
+    )

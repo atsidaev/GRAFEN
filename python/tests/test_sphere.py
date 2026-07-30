@@ -10,7 +10,7 @@ from grafen.demag import solve_demagnetization
 from grafen.field import field_at_points
 from grafen.mesh import sphere_mesh
 
-from .conftest import mean_magnetization, relative_rms
+from .conftest import check_relative_rms, mean_magnetization
 
 
 H_PRIME = np.array([14.0, 14.0, 35.0])
@@ -31,7 +31,7 @@ def test_sphere_magnetization_matches_analytic(sphere_solution):
     i_ref = sphere_magnetization(i0, K)
     i_mean = mean_magnetization(i)
     # Coarse mesh → mean magnetization within a few percent of analytic
-    assert relative_rms(i_mean, i_ref) < 0.05
+    check_relative_rms(i_mean, i_ref, 0.05, "sphere magnetization")
     # Demag must reduce |I| relative to I0
     assert np.linalg.norm(i_mean) < np.linalg.norm(i0) * 0.95
 
@@ -53,8 +53,8 @@ def test_sphere_exterior_field_matches_dipole(sphere_solution):
     h_num = field_at_points(pts, corners, i)
     h_ana = sphere_field_exterior(np.zeros(3), R, i_ref, pts)
     # Use analytic I for reference dipole; numerical uses piecewise I
-    assert relative_rms(h_num, h_ana) < 0.08
+    check_relative_rms(h_num, h_ana, 0.08, "sphere field vs analytic dipole")
 
     # Consistency: dipole with numerical mean I is close to numerical field
     h_dip_mean = sphere_field_exterior(np.zeros(3), R, i_mean, pts)
-    assert relative_rms(h_num, h_dip_mean) < 0.08
+    check_relative_rms(h_num, h_dip_mean, 0.08, "sphere field vs mean-I dipole")

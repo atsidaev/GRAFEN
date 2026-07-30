@@ -9,7 +9,7 @@ from grafen.demag import solve_demagnetization
 from grafen.field import field_at_points
 from grafen.mesh import merge_meshes, sphere_mesh, translate_mesh
 
-from .conftest import mean_magnetization, relative_rms
+from .conftest import check_relative_rms, mean_magnetization
 
 
 H_PRIME = np.array([14.0, 14.0, 35.0])
@@ -31,10 +31,10 @@ def test_two_spheres_far_apart_magnetization():
     i2 = mean_magnetization(i[n1:])
     i_ref = sphere_magnetization(i0, K)
 
-    assert relative_rms(i1, i_ref) < 0.12
-    assert relative_rms(i2, i_ref) < 0.12
+    check_relative_rms(i1, i_ref, 0.12, "two spheres I1 vs analytic")
+    check_relative_rms(i2, i_ref, 0.12, "two spheres I2 vs analytic")
     # Mutual coupling should keep both spheres nearly equal
-    assert relative_rms(i1, i2) < 0.05
+    check_relative_rms(i1, i2, 0.05, "two spheres I1 vs I2")
 
 
 def test_two_spheres_exterior_field_superposition():
@@ -59,4 +59,4 @@ def test_two_spheres_exterior_field_superposition():
     h_ana = sphere_field_exterior(np.zeros(3), R, i_ref, pts) + sphere_field_exterior(
         offset, R, i_ref, pts
     )
-    assert relative_rms(h_num, h_ana) < 0.15
+    check_relative_rms(h_num, h_ana, 0.15, "two spheres field vs analytic")

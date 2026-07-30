@@ -8,7 +8,7 @@ from grafen.analytic import ellipsoid_magnetization
 from grafen.demag import solve_demagnetization
 from grafen.mesh import ellipsoid_mesh
 
-from .conftest import mean_magnetization, relative_rms
+from .conftest import check_relative_rms, mean_magnetization
 
 
 H_PRIME = np.array([14.0, 14.0, 35.0])
@@ -25,7 +25,7 @@ def test_ellipsoid_magnetization_matches_analytic():
     i_ref = ellipsoid_magnetization(i0, K, REQ, RPL)
     i_mean = mean_magnetization(i)
 
-    assert relative_rms(i_mean, i_ref) < 0.10
+    check_relative_rms(i_mean, i_ref, 0.10, "ellipsoid magnetization")
     # For a prolate body along z with H' having large z, I_z / I0_z > I_x / I0_x
     # (smaller demagnetizing factor along the long axis)
     assert (i_ref[2] / i0[2]) > (i_ref[0] / i0[0])

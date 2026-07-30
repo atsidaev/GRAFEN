@@ -10,3 +10,7 @@ float_test
 depth_topograv
 example
 depth_*
+.venv
+.pytest_cache
+*.pyc
+__pycache__

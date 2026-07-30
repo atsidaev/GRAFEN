@@ -9,7 +9,7 @@ from grafen.demag import solve_demagnetization
 from grafen.field import field_at_points
 from grafen.mesh import cube_mesh
 
-from .conftest import mean_magnetization, relative_rms
+from .conftest import check_relative_rms, mean_magnetization, relative_rms
 
 
 H_PRIME = np.array([14.0, 14.0, 35.0])
@@ -33,7 +33,7 @@ def test_cube_uniform_field_matches_analytic_cuboid():
     )
     h_num = field_at_points(pts, corners, dens)
     h_ana = cuboid_field_uniform(BOUNDS, i0, pts)
-    assert relative_rms(h_num, h_ana) < 1e-3
+    check_relative_rms(h_num, h_ana, 1e-3, "cube field vs analytic cuboid")
 
 
 def test_cube_demagnetization_reduces_magnetization():
