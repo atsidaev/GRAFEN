@@ -273,16 +273,25 @@ public:
 		cuSolver::setDevice(mappedDevId);
 	}
 
+	bool enableDemag = true;
+
 	void runExperiment(int argc, char *argv[], MagExperimentGenerator&& gen) {
 		MagExperiment exp;
 
 		// Generate experiment
 		if(isRoot()) {
 			InputParser inp(argc, argv);
+			int demag = 1;
+			if (inp.exists("noDemag"))
+				demag = 0;
+			inp.parseIfExists("demag", demag);
+			enableDemag = demag != 0;
+			cout << "Demagnetization: " << (enableDemag ? "on" : "off") << endl;
 			cout << "Generating model..." << endl;
 			exp = gen.generate(inp);
 			cout << "Model size: " << exp.size() << endl;
 		}
+		Bcast(enableDemag);
 
 		// Solve experiment
 		runExperiment(exp);
@@ -306,13 +315,17 @@ public:
 		// Run experiment tasks (before demag solve)
 		runExperimentTasks(exp, exp.fieldTasksBefore);
 
-		// Demag solve
-		const auto I = demagCG<HexahedronWid>(exp);
-		if(isRoot()) {
-			// Copy updated I back into the model
-			Assert(exp.size() == I.size());
-			for (int i = 0; i < exp.size(); ++i) exp.elements[i].dens = I[i];
-			cout << "Demag solve done. Time: " << tmr.stop() << "sec." << endl;
+		// Demag solve (skip with -noDemag or -demag 0; dens stays I0)
+		if (enableDemag) {
+			const auto I = demagCG<HexahedronWid>(exp);
+			if(isRoot()) {
+				// Copy updated I back into the model
+				Assert(exp.size() == I.size());
+				for (int i = 0; i < exp.size(); ++i) exp.elements[i].dens = I[i];
+				cout << "Demag solve done. Time: " << tmr.stop() << "sec." << endl;
+			}
+		} else if (isRoot()) {
+			cout << "Demag solve skipped. Time: " << tmr.stop() << "sec." << endl;
 		}
 
 		// Run experiment tasks

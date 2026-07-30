@@ -14,7 +14,7 @@ struct TwoCuboids : MagExperimentGenerator {
 		double HprimeX = 14, HprimeY = 14, HprimeZ = 35; //~40A/m
 
         // Read input params        
-        inp.checkUnknownParams({"nx", "ny", "nz", "K", "K2"});
+        inp.checkUnknownParams({"nx", "ny", "nz", "K", "K2", "noDemag", "demag"});
 		inp.parseIfExists("nx", nx);
 		inp.parseIfExists("ny", ny);
 		inp.parseIfExists("nz", nz);
