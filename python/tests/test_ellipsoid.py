@@ -7,15 +7,24 @@ import pytest
 
 from grafen.analytic import ellipsoid_magnetization
 from grafen.demag import solve_magnetic
-from grafen.mesh import ellipsoid_mesh
+from grafen.mesh import ellipsoid_mesh, translate_mesh
 
-from .conftest import check_four_way, mean_magnetization, mesh_from_stl, roundtrip_vtu
+from .conftest import (
+    ELLIPSOID_CENTER,
+    ELLIPSOID_REQ,
+    ELLIPSOID_RPL,
+    check_four_way,
+    mean_magnetization,
+    mesh_from_stl,
+    roundtrip_vtu,
+)
 
 
 H_PRIME = np.array([14.0, 14.0, 35.0])
 K = 2.0
-REQ = 10.0
-RPL = 20.0
+REQ = ELLIPSOID_REQ
+RPL = ELLIPSOID_RPL
+CENTER = ELLIPSOID_CENTER
 TOL_STL_I = 0.15
 
 
@@ -23,6 +32,7 @@ TOL_STL_I = 0.15
 def test_ellipsoid_magnetization_matches_analytic(demag, tmp_path):
     i0 = H_PRIME * K
     corners, dens0 = ellipsoid_mesh(REQ, RPL, nl=4, nb=4, nr=2, magnetization=i0)
+    corners = translate_mesh(corners, CENTER)
     c_vtu, d_vtu, _ = roundtrip_vtu(corners, dens0, K, tmp_path / "ellipsoid.vtu")
     c_stl, d_stl, _ = mesh_from_stl(
         "ellipsoid.stl",

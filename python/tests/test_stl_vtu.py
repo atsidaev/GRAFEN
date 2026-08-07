@@ -1,4 +1,4 @@
-"""STL → voxel hex VTU vs known meshes / analytics."""
+"""STL → voxel hex VTU vs known meshes / analytics (bodies below z=0)."""
 
 from __future__ import annotations
 
@@ -12,9 +12,18 @@ from grafen.demag import solve_magnetic
 from grafen.field import field_at_points
 from grafen.mesh import cube_mesh
 from grafen.stl_convert import convert_stl_to_vtu, points_inside_stl, voxelize_stl
-from grafen.stl_io import read_stl
+from grafen.stl_io import read_stl, stl_bbox
 
-from .conftest import check_relative_rms, check_three_way, mean_magnetization
+from .conftest import (
+    CUBE_BOUNDS,
+    ELLIPSOID_REQ,
+    ELLIPSOID_RPL,
+    SPHERE_CENTER,
+    SPHERE_R,
+    check_relative_rms,
+    check_three_way,
+    mean_magnetization,
+)
 
 
 DATA = Path(__file__).resolve().parent / "data"
@@ -26,7 +35,10 @@ def stl_files():
     for name in ("cube.stl", "sphere.stl", "ellipsoid.stl"):
         path = DATA / name
         assert path.is_file(), f"missing {path}; run tools/generate_test_stls.py"
-        assert read_stl(path).shape[0] > 0
+        tris = read_stl(path)
+        assert tris.shape[0] > 0
+        _, hi = stl_bbox(tris)
+        assert hi[2] <= 0.0 + 1e-9, f"{name} must lie under z=0 (got zmax={hi[2]})"
     return DATA
 
 
@@ -34,20 +46,21 @@ def test_points_inside_cube_stl(stl_files):
     tris = read_stl(stl_files / "cube.stl")
     pts = np.array(
         [
-            [0.0, 0.0, 0.0],
-            [4.0, 1.0, 1.0],
-            [6.0, 0.0, 0.0],  # outside
-            [-4.9, -1.9, -1.9],
+            [0.0, 0.0, -10.0],  # cube center
+            [4.0, 1.0, -10.0],
+            [0.0, 0.0, 0.0],  # surface — outside
+            [12.0, 0.0, -10.0],  # outside laterally
+            [-9.0, -4.0, -14.0],
         ]
     )
     inside = points_inside_stl(pts, tris)
-    assert inside.tolist() == [True, True, False, True]
+    assert inside.tolist() == [True, True, False, False, True]
 
 
 def test_stl_cube_voxel_matches_cube_mesh(stl_files, demag, tmp_path):
     """Axis-aligned cube STL + voxel fill of the same AABB ≡ cube_mesh."""
     K = 0.2
-    bounds = ((-5.0, 5.0), (-2.0, 2.0), (-2.0, 2.0))
+    bounds = CUBE_BOUNDS
     i0 = H_PRIME * K
     (x0, x1), (y0, y1), (z0, z1) = bounds
     corners_h, dens0 = cube_mesh((x0, x1, 4), (y0, y1, 2), (z0, z1, 2), magnetization=i0)
@@ -70,7 +83,7 @@ def test_stl_cube_voxel_matches_cube_mesh(stl_files, demag, tmp_path):
     i_hard = solve_magnetic(corners_h, K, dens0, tol=1e-3, max_iter=15, demag=demag)
     i_stl = solve_magnetic(corners_s, K, dens_s, tol=1e-3, max_iter=15, demag=demag)
 
-    pts = np.array([[0.0, 0.0, 6.0], [8.0, 0.0, 0.0], [0.0, 5.0, 5.0], [-6.0, 3.0, 4.0]])
+    pts = np.array([[0.0, 0.0, 0.0], [8.0, 0.0, 0.0], [0.0, 5.0, 0.0], [-6.0, 3.0, 0.0]])
     h_hard = field_at_points(pts, corners_h, i_hard)
     h_stl = field_at_points(pts, corners_s, i_stl)
     if demag:
@@ -94,10 +107,9 @@ def test_stl_cube_voxel_matches_cube_mesh(stl_files, demag, tmp_path):
 
 
 def test_stl_sphere_voxel_vs_analytic(stl_files, demag, tmp_path):
-    K, R = 2.0, 10.0
+    K, R = 2.0, SPHERE_R
     i0 = H_PRIME * K
     vtu = tmp_path / "from_stl_sphere.vtu"
-    # Voxel fill of sphere AABB; stair-step surface → looser field tolerance
     corners, dens, _ = convert_stl_to_vtu(
         stl_files / "sphere.stl",
         vtu,
@@ -108,7 +120,8 @@ def test_stl_sphere_voxel_vs_analytic(stl_files, demag, tmp_path):
         nz=12,
     )
     assert corners.shape[0] > 100
-    assert corners.shape[0] < 12 * 12 * 12  # not the full AABB
+    assert corners.shape[0] < 12 * 12 * 12
+    assert float(corners[:, :, 2].max()) <= 0.0 + 1e-9
 
     i_stl = solve_magnetic(corners, K, dens, tol=1e-3, max_iter=15, demag=demag)
     i_ref = sphere_magnetization(i0, K) if demag else i0
@@ -119,14 +132,14 @@ def test_stl_sphere_voxel_vs_analytic(stl_files, demag, tmp_path):
         "STL sphere voxel magnetization",
     )
 
-    pts = np.array([[0.0, 0.0, 25.0], [20.0, 0.0, 20.0], [0.0, 30.0, 0.0], [-15.0, 15.0, 15.0]])
+    pts = np.array([[0.0, 0.0, 0.0], [20.0, 0.0, 0.0], [0.0, 30.0, 0.0], [-15.0, 15.0, 0.0]])
     h_stl = field_at_points(pts, corners, i_stl)
-    h_ana = sphere_field_exterior(np.zeros(3), R, i_ref, pts)
+    h_ana = sphere_field_exterior(SPHERE_CENTER, R, i_ref, pts)
     check_relative_rms(h_stl, h_ana, 0.20, "STL sphere voxel field")
 
 
 def test_stl_ellipsoid_voxel_vs_analytic(stl_files, demag, tmp_path):
-    K, REQ, RPL = 2.0, 10.0, 20.0
+    K, REQ, RPL = 2.0, ELLIPSOID_REQ, ELLIPSOID_RPL
     i0 = H_PRIME * K
     vtu = tmp_path / "from_stl_ellipsoid.vtu"
     corners, dens, _ = convert_stl_to_vtu(
@@ -139,6 +152,7 @@ def test_stl_ellipsoid_voxel_vs_analytic(stl_files, demag, tmp_path):
         nz=16,
     )
     assert corners.shape[0] > 50
+    assert float(corners[:, :, 2].max()) <= 0.0 + 1e-9
 
     i_stl = solve_magnetic(corners, K, dens, tol=1e-3, max_iter=15, demag=demag)
     i_ref = ellipsoid_magnetization(i0, K, REQ, RPL) if demag else i0

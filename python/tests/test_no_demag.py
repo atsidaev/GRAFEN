@@ -11,9 +11,20 @@ import numpy as np
 from grafen.analytic import cuboid_field_uniform, sphere_field_exterior
 from grafen.demag import solve_magnetic
 from grafen.field import field_at_points
-from grafen.mesh import cube_mesh, ellipsoid_mesh, sphere_mesh
+from grafen.mesh import cube_mesh, ellipsoid_mesh, sphere_mesh, translate_mesh
 
-from .conftest import check_four_way, mean_magnetization, mesh_from_stl, roundtrip_vtu
+from .conftest import (
+    CUBE_BOUNDS,
+    ELLIPSOID_CENTER,
+    ELLIPSOID_REQ,
+    ELLIPSOID_RPL,
+    SPHERE_CENTER,
+    SPHERE_R,
+    check_four_way,
+    mean_magnetization,
+    mesh_from_stl,
+    roundtrip_vtu,
+)
 
 
 H_PRIME = np.array([14.0, 14.0, 35.0])
@@ -21,9 +32,10 @@ TOL_STL_H = 0.20
 
 
 def test_sphere_no_demag(demag, tmp_path):
-    K, R = 2.0, 10.0
+    K, R = 2.0, SPHERE_R
     i0 = H_PRIME * K
     corners, dens0 = sphere_mesh(R, nl=4, nb=4, nr=2, magnetization=i0)
+    corners = translate_mesh(corners, SPHERE_CENTER)
     c_vtu, d_vtu, _ = roundtrip_vtu(corners, dens0, K, tmp_path / "sphere_nodemag.vtu")
     c_stl, d_stl, _ = mesh_from_stl(
         "sphere.stl",
@@ -50,16 +62,16 @@ def test_sphere_no_demag(demag, tmp_path):
 
     pts = np.array(
         [
-            [0.0, 0.0, 25.0],
-            [20.0, 0.0, 20.0],
+            [0.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
             [0.0, 30.0, 0.0],
-            [-15.0, 15.0, 15.0],
+            [-15.0, 15.0, 0.0],
         ]
     )
     h_hard = field_at_points(pts, corners, i_hard)
     h_vtu = field_at_points(pts, c_vtu, i_vtu)
     h_stl = field_at_points(pts, c_stl, i_stl)
-    h_ana = sphere_field_exterior(np.zeros(3), R, i0, pts)
+    h_ana = sphere_field_exterior(SPHERE_CENTER, R, i0, pts)
     check_four_way(
         h_hard,
         h_vtu,
@@ -72,9 +84,10 @@ def test_sphere_no_demag(demag, tmp_path):
 
 
 def test_ellipsoid_no_demag(demag, tmp_path):
-    K, REQ, RPL = 2.0, 10.0, 20.0
+    K, REQ, RPL = 2.0, ELLIPSOID_REQ, ELLIPSOID_RPL
     i0 = H_PRIME * K
     corners, dens0 = ellipsoid_mesh(REQ, RPL, nl=4, nb=4, nr=2, magnetization=i0)
+    corners = translate_mesh(corners, ELLIPSOID_CENTER)
     c_vtu, d_vtu, _ = roundtrip_vtu(corners, dens0, K, tmp_path / "ellipsoid_nodemag.vtu")
     c_stl, d_stl, _ = mesh_from_stl(
         "ellipsoid.stl",
@@ -102,7 +115,7 @@ def test_ellipsoid_no_demag(demag, tmp_path):
 
 def test_cube_no_demag(demag, tmp_path):
     K = 0.2
-    bounds = ((-5.0, 5.0), (-2.0, 2.0), (-2.0, 2.0))
+    bounds = CUBE_BOUNDS
     i0 = H_PRIME * K
     (x0, x1), (y0, y1), (z0, z1) = bounds
     corners, dens0 = cube_mesh((x0, x1, 4), (y0, y1, 2), (z0, z1, 2), magnetization=i0)
@@ -133,10 +146,10 @@ def test_cube_no_demag(demag, tmp_path):
 
     pts = np.array(
         [
-            [0.0, 0.0, 6.0],
+            [0.0, 0.0, 0.0],
             [8.0, 0.0, 0.0],
-            [0.0, 5.0, 5.0],
-            [-6.0, 3.0, 4.0],
+            [0.0, 5.0, 0.0],
+            [-6.0, 3.0, 0.0],
         ]
     )
     h_hard = field_at_points(pts, corners, i_hard)

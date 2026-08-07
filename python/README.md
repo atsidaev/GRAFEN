@@ -48,7 +48,8 @@ python tools/stl_to_vtu.py model.stl model.vtu --nx 32 --ny 32 --nz 32 \
 
 Optional `--bounds x0 x1 y0 y1 z0 z1` overrides the STL AABB; `--pad` expands it.
 
-Test surfaces: `tests/data/{cube,sphere,ellipsoid}.stl` (regenerate with `python tools/generate_test_stls.py`).
+Test surfaces: `tests/data/{cube,sphere,ellipsoid}.stl` — fully below z=0 (tops at z=-5);
+regenerate with `python tools/generate_test_stls.py`.
 
 ## Field → Surfer GRD (no demag)
 

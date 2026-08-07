@@ -95,6 +95,15 @@ def check_four_way(
 
 STL_DATA = Path(__file__).resolve().parent / "data"
 
+# Test STL bodies fully below the survey plane z=0 (tops at z=-5).
+# Keep in sync with tools/generate_test_stls.py.
+CUBE_BOUNDS = ((-10.0, 10.0), (-5.0, 5.0), (-15.0, -5.0))
+SPHERE_R = 10.0
+SPHERE_CENTER = np.array([0.0, 0.0, -15.0])
+ELLIPSOID_REQ = 10.0
+ELLIPSOID_RPL = 20.0
+ELLIPSOID_CENTER = np.array([0.0, 0.0, -25.0])
+
 
 def mesh_from_stl(
     stl_name: str,

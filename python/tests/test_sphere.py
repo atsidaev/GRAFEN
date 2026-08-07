@@ -8,9 +8,11 @@ import pytest
 from grafen.analytic import sphere_field_exterior, sphere_magnetization
 from grafen.demag import solve_magnetic
 from grafen.field import field_at_points
-from grafen.mesh import sphere_mesh
+from grafen.mesh import sphere_mesh, translate_mesh
 
 from .conftest import (
+    SPHERE_CENTER,
+    SPHERE_R,
     check_four_way,
     check_relative_rms,
     mean_magnetization,
@@ -21,7 +23,8 @@ from .conftest import (
 
 H_PRIME = np.array([14.0, 14.0, 35.0])
 K = 2.0
-R = 10.0
+R = SPHERE_R
+CENTER = SPHERE_CENTER
 # Stair-step voxel surface vs body-fitted / analytic
 TOL_STL_I = 0.12
 TOL_STL_H = 0.20
@@ -31,6 +34,7 @@ TOL_STL_H = 0.20
 def sphere_meshes(demag, tmp_path_factory):
     i0 = H_PRIME * K
     corners, dens0 = sphere_mesh(R, nl=4, nb=4, nr=2, magnetization=i0)
+    corners = translate_mesh(corners, CENTER)
     base = tmp_path_factory.mktemp("sphere")
     c_vtu, d_vtu, _ = roundtrip_vtu(corners, dens0, K, base / "sphere.vtu")
     c_stl, d_stl, _ = mesh_from_stl(
@@ -84,18 +88,19 @@ def test_sphere_exterior_field_matches_dipole(sphere_meshes):
     i_stl = sphere_meshes["i_stl"]
     i_mean = mean_magnetization(i_hard)
 
+    # Survey plane z=0 above buried sphere (top at z=-5)
     pts = np.array(
         [
-            [0.0, 0.0, 25.0],
-            [20.0, 0.0, 20.0],
+            [0.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
             [0.0, 30.0, 0.0],
-            [-15.0, 15.0, 15.0],
+            [-15.0, 15.0, 0.0],
         ]
     )
     h_hard = field_at_points(pts, sphere_meshes["corners"], i_hard)
     h_vtu = field_at_points(pts, sphere_meshes["c_vtu"], i_vtu)
     h_stl = field_at_points(pts, sphere_meshes["c_stl"], i_stl)
-    h_ana = sphere_field_exterior(np.zeros(3), R, i_ref, pts)
+    h_ana = sphere_field_exterior(CENTER, R, i_ref, pts)
     check_four_way(
         h_hard,
         h_vtu,
@@ -106,5 +111,5 @@ def test_sphere_exterior_field_matches_dipole(sphere_meshes):
         tol_stl=TOL_STL_H,
     )
 
-    h_dip_mean = sphere_field_exterior(np.zeros(3), R, i_mean, pts)
+    h_dip_mean = sphere_field_exterior(CENTER, R, i_mean, pts)
     check_relative_rms(h_hard, h_dip_mean, 0.08, "sphere field vs mean-I dipole")
