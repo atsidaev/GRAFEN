@@ -121,6 +121,29 @@ def field_grid_from_model(
     return grid
 
 
+def magnetization_for_field(
+    dens: np.ndarray,
+    kappa: np.ndarray,
+    *,
+    h_prime: np.ndarray | None = None,
+    kappa_override: float | np.ndarray | None = None,
+) -> np.ndarray:
+    """Magnetization used for no-demag field: stored ``I``, or ``I0 = κ H′``.
+
+    If ``h_prime`` is given, ignore stored ``dens`` and set
+    ``I = kappa * H'`` (per cell). ``kappa_override`` replaces VTU κ when set.
+    """
+    n = dens.shape[0]
+    if kappa_override is not None:
+        k = np.broadcast_to(np.asarray(kappa_override, dtype=float), (n,)).astype(float)
+    else:
+        k = np.asarray(kappa, dtype=float).reshape(n)
+    if h_prime is not None:
+        hp = np.asarray(h_prime, dtype=float).reshape(3)
+        return k[:, None] * hp
+    return np.asarray(dens, dtype=float).reshape(n, 3)
+
+
 def vtu_field_to_grd(
     vtu_path: str | Path,
     grd_path: str | Path,
@@ -131,14 +154,44 @@ def vtu_field_to_grd(
     n_col: int | None = None,
     n_row: int | None = None,
     component: str = "hz",
+    h_prime: np.ndarray | None = None,
+    kappa: float | None = None,
 ) -> Grid:
-    """Load model, compute no-demag field on grid, write Surfer GS binary (.grd)."""
-    corners, dens, _kappa = load_model(vtu_path)
+    """Load model, compute no-demag field on grid, write Surfer GS binary (.grd).
+
+    Magnetization: VTU ``I`` by default. With ``h_prime``, use ``I0 = κ H'``
+    (κ from VTU, or ``kappa`` if given).
+    """
+    corners, dens, kappa_arr = load_model(vtu_path)
+    dens_use = magnetization_for_field(
+        dens, kappa_arr, h_prime=h_prime, kappa_override=kappa
+    )
+    z_lo = float(corners[:, :, 2].min())
+    z_hi = float(corners[:, :, 2].max())
+    if z_lo - 1e-9 <= z <= z_hi + 1e-9:
+        import warnings
+
+        warnings.warn(
+            f"Observation plane z={z:g} intersects the model Z-range "
+            f"[{z_lo:g}, {z_hi:g}]; field singularities / NaNs are expected. "
+            f"Use --z outside the body (C++ examples: bodies at z<0, grid at z=0).",
+            UserWarning,
+            stacklevel=2,
+        )
+    if not np.any(np.abs(dens_use) > 0):
+        import warnings
+
+        warnings.warn(
+            "Magnetization I is all zeros — GRD will be ~0. "
+            "Pass -H Hx Hy Hz (and -k / VTU kappa) or store nonzero I in the VTU.",
+            UserWarning,
+            stacklevel=2,
+        )
     xmin, xmax, xnum, _dx = parse_axis_spec(x_spec, n=n_col, name="x")
     ymin, ymax, ynum, _dy = parse_axis_spec(y_spec, n=n_row, name="y")
     grid = field_grid_from_model(
         corners,
-        dens,
+        dens_use,
         xmin=xmin,
         xmax=xmax,
         xnum=xnum,

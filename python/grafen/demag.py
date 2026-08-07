@@ -1,4 +1,4 @@
-"""Self-demagnetization via conjugate gradients (C++ demagCG / CG.h)."""
+"""Magnetization solve: optional self-demagnetization (C++ demagCG / CG.h)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import numpy as np
 from .field import field_at_points, mass_centers
 
 
-def solve_demagnetization(
+def solve_magnetic(
     corners: np.ndarray,
     kappa: np.ndarray | float,
     i0: np.ndarray,
@@ -15,20 +15,12 @@ def solve_demagnetization(
     tol: float = 1e-4,
     max_iter: int = 20,
     x0: np.ndarray | None = None,
+    demag: bool = True,
 ) -> np.ndarray:
-    """Solve I = I0 + K H_snd(I)  (Fredholm II / discrete demag system).
+    """Return magnetization for field calc.
 
-    Parameters
-    ----------
-    corners : (N, 8, 3)
-    kappa : float or (N,) susceptibility
-    i0 : (N, 3) primary magnetization K*H' (+ remanence)
-    tol, max_iter : CG stopping criteria (relative residual)
-    x0 : initial guess (defaults to i0)
-
-    Returns
-    -------
-    I : (N, 3) magnetization including self-demagnetization
+    With demag=True, solve I = I0 + K H_snd(I).
+    With demag=False, return I0 unchanged.
     """
     n = corners.shape[0]
     kappa = np.broadcast_to(np.asarray(kappa, dtype=float), (n,)).astype(float)
@@ -36,6 +28,8 @@ def solve_demagnetization(
     if i0.ndim == 1:
         i0 = np.tile(i0, (n, 1))
     x = np.array(i0 if x0 is None else x0, dtype=float, copy=True)
+    if not demag:
+        return x
 
     centers = mass_centers(corners)
 

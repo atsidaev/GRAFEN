@@ -24,6 +24,20 @@ except ImportError:  # pragma: no cover
 
 
 @njit(cache=True)
+def _safe_edge_log(am_a, am_b, edge_len):
+    """log((|a|+|b|+L)/(|a|+|b|-L)) / L; 0 if point is on the edge (singular)."""
+    if edge_len <= 1e-30:
+        return 0.0
+    denom = am_a + am_b - edge_len
+    if denom <= 1e-12 * edge_len or denom <= 1e-30:
+        return 0.0
+    numer = am_a + am_b + edge_len
+    if numer <= 0.0:
+        return 0.0
+    return np.log(numer / denom) / edge_len
+
+
+@njit(cache=True)
 def _triangle_integral(p0, tri):
     a1 = tri[0] - p0
     a2 = tri[1] - p0
@@ -31,6 +45,10 @@ def _triangle_integral(p0, tri):
     a1m = np.sqrt(a1[0] * a1[0] + a1[1] * a1[1] + a1[2] * a1[2])
     a2m = np.sqrt(a2[0] * a2[0] + a2[1] * a2[1] + a2[2] * a2[2])
     a3m = np.sqrt(a3[0] * a3[0] + a3[1] * a3[1] + a3[2] * a3[2])
+    # Observation on a vertex → singular; skip this triangle
+    if a1m < 1e-14 or a2m < 1e-14 or a3m < 1e-14:
+        return np.array([np.nan, np.nan, np.nan])
+
     a12 = tri[1] - tri[0]
     a23 = tri[2] - tri[1]
     a31 = tri[0] - tri[2]
@@ -39,12 +57,9 @@ def _triangle_integral(p0, tri):
     a31m = np.sqrt(a31[0] * a31[0] + a31[1] * a31[1] + a31[2] * a31[2])
 
     res = np.zeros(3)
-    if a31m > 1e-30:
-        res = res + a31 * (np.log((a3m + a1m + a31m) / (a3m + a1m - a31m)) / a31m)
-    if a12m > 1e-30:
-        res = res + a12 * (np.log((a1m + a2m + a12m) / (a1m + a2m - a12m)) / a12m)
-    if a23m > 1e-30:
-        res = res + a23 * (np.log((a2m + a3m + a23m) / (a2m + a3m - a23m)) / a23m)
+    res = res + a31 * _safe_edge_log(a3m, a1m, a31m)
+    res = res + a12 * _safe_edge_log(a1m, a2m, a12m)
+    res = res + a23 * _safe_edge_log(a2m, a3m, a23m)
 
     # n = cross(tri[1]-tri[0], tri[2]-tri[0])
     e1 = tri[1] - tri[0]

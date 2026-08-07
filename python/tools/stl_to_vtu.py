@@ -3,7 +3,7 @@
 
 Example:
   python tools/stl_to_vtu.py tests/data/sphere.stl /tmp/sphere.vtu \\
-      --nx 24 --ny 24 --nz 24 --kappa 2 --I 28 28 70
+      --nx 24 --ny 24 --nz 24 -k 2 -H 14 14 35
 """
 
 from __future__ import annotations

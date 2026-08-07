@@ -211,14 +211,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("stl", type=Path, help="Input .stl (closed / watertight)")
     p.add_argument("vtu", type=Path, help="Output .vtu")
-    p.add_argument("--kappa", type=float, default=0.0)
+    p.add_argument("-k", "--kappa", type=float, default=0.0, help="Susceptibility κ")
     p.add_argument(
-        "--I",
+        "-H",
+        "--Hprime",
+        dest="h_prime",
+        type=float,
+        nargs=3,
+        default=None,
+        metavar=("Hx", "Hy", "Hz"),
+        help="Inducing field H'; store I0 = κ H' in the VTU (preferred over -I)",
+    )
+    p.add_argument(
+        "-I",
         dest="magnetization",
         type=float,
         nargs=3,
-        default=[0.0, 0.0, 0.0],
+        default=None,
         metavar=("Ix", "Iy", "Iz"),
+        help="Magnetization I (alternative to -H; default 0 if neither given)",
     )
     p.add_argument("--nx", type=int, default=16, help="voxels along X (default 16)")
     p.add_argument("--ny", type=int, default=16, help="voxels along Y (default 16)")
@@ -244,10 +255,19 @@ def main(argv: list[str] | None = None) -> int:
         x0, x1, y0, y1, z0, z1 = args.bounds
         bounds = ((x0, x1), (y0, y1), (z0, z1))
 
+    if args.h_prime is not None and args.magnetization is not None:
+        p.error("use either -H/--Hprime or -I, not both")
+    if args.h_prime is not None:
+        magnetization = np.array(args.h_prime, dtype=float) * float(args.kappa)
+    elif args.magnetization is not None:
+        magnetization = np.array(args.magnetization, dtype=float)
+    else:
+        magnetization = np.zeros(3)
+
     corners, dens, kappa = convert_stl_to_vtu(
         args.stl,
         args.vtu,
-        magnetization=np.array(args.magnetization, dtype=float),
+        magnetization=magnetization,
         kappa=args.kappa,
         nx=args.nx,
         ny=args.ny,

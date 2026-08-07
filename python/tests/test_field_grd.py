@@ -94,3 +94,53 @@ def test_vtu_to_grd_cube_hz(tmp_path: Path):
 def test_component_bt():
     h = np.array([[3.0, 4.0, 0.0], [0.0, 0.0, 2.0]])
     assert np.allclose(component_values(h, "bt"), [5.0, 2.0])
+
+
+def test_vtu_to_grd_from_H_and_kappa(tmp_path: Path):
+    """I0 = κ H' at field time; VTU may store I=0."""
+    from grafen.field_grd import magnetization_for_field
+
+    bounds = ((-5.0, 5.0), (-2.0, 2.0), (-2.0, 2.0))
+    h_prime = np.array([14.0, 14.0, 35.0])
+    kappa = 0.2
+    i0 = h_prime * kappa
+    (x0, x1), (y0, y1), (z0, z1) = bounds
+    corners, dens0 = cube_mesh((x0, x1, 4), (y0, y1, 2), (z0, z1, 2), magnetization=i0)
+    # Store zero I but keep kappa — field tool rebuilds I0 from --H
+    dens_zero = np.zeros_like(dens0)
+    vtu = tmp_path / "cube.vtu"
+    save_model(vtu, corners, dens_zero, kappa=kappa)
+
+    dens_use = magnetization_for_field(dens_zero, np.full(len(dens0), kappa), h_prime=h_prime)
+    assert np.allclose(dens_use, dens0)
+
+    g_h = vtu_field_to_grd(
+        vtu,
+        tmp_path / "from_H.grd",
+        x_spec="-20,20,5",
+        y_spec="-20,20,5",
+        z=6.0,
+        h_prime=h_prime,
+        kappa=kappa,
+    )
+    g_i = vtu_field_to_grd(
+        vtu,
+        tmp_path / "from_I.grd",
+        x_spec="-20,20,5",
+        y_spec="-20,20,5",
+        z=6.0,
+    )
+    # stored I=0 → zero field; --H path nonzero and matches explicit-I model
+    assert np.allclose(g_i.data, 0.0)
+    assert np.sqrt(np.mean(g_h.data**2)) > 1e-3
+
+    vtu_i = tmp_path / "cube_I.vtu"
+    save_model(vtu_i, corners, dens0, kappa=kappa)
+    g_ref = vtu_field_to_grd(
+        vtu_i,
+        tmp_path / "ref.grd",
+        x_spec="-20,20,5",
+        y_spec="-20,20,5",
+        z=6.0,
+    )
+    assert np.allclose(g_h.data, g_ref.data, rtol=1e-12, atol=1e-12)

@@ -59,4 +59,34 @@ inline double check_relative_rms(
 	return check_relative_rms(std::vector<Point>{num}, std::vector<Point>{ref}, tol, label);
 }
 
+inline void check_three_way(
+	const std::vector<Point>& hardcoded,
+	const std::vector<Point>& vtu,
+	const std::vector<Point>& analytic,
+	double tol_ana,
+	const std::string& label,
+	double tol_io = 1e-10)
+{
+	check_relative_rms(hardcoded, analytic, tol_ana, label + " hardcoded vs analytic");
+	check_relative_rms(vtu, analytic, tol_ana, label + " vtu vs analytic");
+	check_relative_rms(vtu, hardcoded, tol_io, label + " vtu vs hardcoded");
+}
+
+inline void check_three_way(
+	const Point& hardcoded,
+	const Point& vtu,
+	const Point& analytic,
+	double tol_ana,
+	const std::string& label,
+	double tol_io = 1e-10)
+{
+	check_three_way(
+		std::vector<Point>{hardcoded},
+		std::vector<Point>{vtu},
+		std::vector<Point>{analytic},
+		tol_ana,
+		label,
+		tol_io);
+}
+
 }  // namespace grafen_test

@@ -32,7 +32,7 @@ NVCC_BIN := $(if $(wildcard $(CUDA_PATH)/bin/nvcc),$(CUDA_PATH)/bin/nvcc,$(NVCC)
 grafen_tests: tests_main.o calcField.o
 	$(NVCC_BIN) -o $@ $^ $(CXXFLAGS) -lrt
 
-tests_main.o: tests_main.cpp field_cpu.h mesh_cpu.h analytic.h check.h
+tests_main.o: tests_main.cpp field_cpu.h mesh_cpu.h analytic.h check.h model_vtu.h
 	$(CXX) -c -o $@ tests_main.cpp $(CXXFLAGS) $(INCLUDES) -DUSE_CUDA -I$(CUDA_PATH)/include
 
 calcField.o: ../calcField.cu ../calcField.h ../mobj.h ../cuVar.h
@@ -40,7 +40,7 @@ calcField.o: ../calcField.cu ../calcField.h ../mobj.h ../cuVar.h
 
 else
 
-grafen_tests: tests_main.cpp field_cpu.h mesh_cpu.h analytic.h check.h
+grafen_tests: tests_main.cpp field_cpu.h mesh_cpu.h analytic.h check.h model_vtu.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ tests_main.cpp
 
 endif
