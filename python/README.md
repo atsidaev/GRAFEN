@@ -71,3 +71,6 @@ python tools/vtu_to_grd.py body.vtu hz.grd \
 Without ``-H``, uses magnetization ``I`` already stored in the VTU.
 ``stl_to_vtu`` likewise accepts ``-H`` / ``-k`` (stores ``I0 = κ H'``).
 
+CUDA twin (same CLI flags): ``make -C src/tools`` then
+``src/tools/vtu_to_grd model.vtu out.grd --x=-20,20,10 --y=-20,20,10 -z 0 -H 2 2 2 -k 1``.
+

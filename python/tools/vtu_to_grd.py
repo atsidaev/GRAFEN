@@ -116,7 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         kappa=args.kappa,
     )
     mag_note = (
-        f"I0=κH' H={tuple(h_prime)} kappa={args.kappa if args.kappa is not None else 'from VTU'}"
+        f"I0=k*H' H=({h_prime[0]:g},{h_prime[1]:g},{h_prime[2]:g}) "
+        f"kappa={args.kappa if args.kappa is not None else 'from VTU'}"
         if h_prime is not None
         else "I from VTU"
     )

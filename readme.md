@@ -22,6 +22,15 @@ Specify paths to MPI in `src/rocm.makefile` and run `cd src && make` to build.
   - AMD GPU [with ROCm support](https://github.com/RadeonOpenCompute/ROCm#Hardware-and-Software-Support)
 - At least 2GB GPU memory to run the example
 
+## VTU → Surfer GRD (CUDA, no demag)
+
+```bash
+make -C src/tools
+src/tools/vtu_to_grd model.vtu out.grd --x=-20,20,10 --y=-20,20,10 -z 0 -H 2 2 2 -k 1
+```
+
+Same options as `python/tools/vtu_to_grd.py` (uses `gFieldSolver` CUDA kernel).
+
 ## How to run the example
 
 `mpiexec.mpich -l -machinefile hosts.txt src/grafen_rocm [arguments]`
