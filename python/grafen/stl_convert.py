@@ -173,23 +173,49 @@ def polar_mesh_stl(
             "pass --center inside a star-convex body"
         )
 
-    # Full sphere: λ ∈ [0, 2π], β ∈ [-π/2, π/2]
-    lam = np.linspace(0.0, 2.0 * np.pi, nl + 1)
-    b = np.linspace(-0.5 * np.pi, 0.5 * np.pi, nb + 1)
-
     verts = tris.reshape(-1, 3)
     rel_v = verts - center.reshape(1, 3)
+    vnorm = np.linalg.norm(rel_v, axis=1)
+    vnorm_safe = np.maximum(vnorm, 1e-30)
+    vdir = rel_v / vnorm_safe[:, None]
 
     def surface_radius(direction: np.ndarray) -> float:
+        """Exit distance along unit ``direction``; robust to MT edge misses."""
+        direction = np.asarray(direction, dtype=np.float64).reshape(3)
+        dn = np.linalg.norm(direction)
+        if dn < 1e-30:
+            return float("nan")
+        direction = direction / dn
+
         t = _ray_first_hit_t(center, direction, tris)
         if np.isfinite(t) and t > 0.0:
             return t
-        # Fallback for mesh holes / grazing rays: farthest vertex along this ray
-        proj = rel_v @ direction
-        pos = proj > 0.0
-        if not np.any(pos):
-            return float("nan")
-        return float(np.max(proj[pos]))
+
+        # Grazing hit on STL edges (common when ray lies in a coordinate plane):
+        # retry with tiny angular jitters.
+        for scale in (1e-4, 1e-3, 1e-2):
+            for axis in (0, 1, 2):
+                jitter = np.zeros(3)
+                jitter[axis] = scale
+                for sign in (1.0, -1.0):
+                    d2 = direction + sign * jitter
+                    d2 = d2 / np.linalg.norm(d2)
+                    t2 = _ray_first_hit_t(center, d2, tris)
+                    if np.isfinite(t2) and t2 > 0.0:
+                        return t2
+
+        # Last resort: support among vertices nearly along this ray (not all verts)
+        cosang = vdir @ direction
+        for thr in (0.995, 0.98, 0.95, 0.9):
+            sel = cosang >= thr
+            if np.any(sel):
+                return float(np.max(rel_v[sel] @ direction))
+        return float("nan")
+
+    # Full sphere: β ∈ [-π/2, π/2]; λ offset by half step so rays avoid
+    # coordinate-plane triangle edges (λ=0,π) that make Möller–Trumbore miss.
+    lam = (np.arange(nl) + 0.5) * (2.0 * np.pi / float(nl))
+    b = np.linspace(-0.5 * np.pi, 0.5 * np.pi, nb + 1)
 
     # Surface distance along each angular node ray (λ periodic: store nl columns)
     r_surf = np.empty((nb + 1, nl), dtype=np.float64)
