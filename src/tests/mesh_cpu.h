@@ -1,13 +1,33 @@
 #pragma once
-/** Mesh helpers: cubeGen from MagExperimentGenerator; ellipsoidGen from elFieldCU. */
+/** Mesh helpers (cubeGen / ellipsoidGen; no MagExperiment / Dat.h dependency). */
 
 #include <functional>
 #include <vector>
 
-#include "../MagExperimentGenerator.h"
 #include "../mobj.h"
 
 namespace grafen_test {
+
+inline void cubeGen(const Volume& v, const Point J, std::vector<HexahedronWid>& hsi) {
+	hsi.resize(v.x.n * v.y.n * v.z.n);
+
+	for (int zi = 0; zi < static_cast<int>(v.z.n); ++zi)
+		for (int yi = 0; yi < static_cast<int>(v.y.n); ++yi)
+			for (int xi = 0; xi < static_cast<int>(v.x.n); ++xi) {
+				Quadrangle cur{
+					Point{v.x.at(xi + 1), v.y.at(yi + 1), 0},
+					Point{v.x.at(xi + 1), v.y.at(yi), 0},
+					Point{v.x.at(xi), v.y.at(yi + 1), 0},
+					Point{v.x.at(xi), v.y.at(yi), 0},
+				};
+
+				const int ind = (zi * static_cast<int>(v.y.n) + yi) * static_cast<int>(v.x.n) + xi;
+				hsi[ind] = Hexahedron{
+					cur + Point{0, 0, v.z.at(zi + 1)},
+					cur + Point{0, 0, v.z.at(zi)},
+					J};
+			}
+}
 
 inline void ellipsoidGen(
 	const Ellipsoid& e,

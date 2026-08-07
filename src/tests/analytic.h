@@ -6,9 +6,9 @@
 #include <vector>
 
 #include "../AssertException.h"
-#include "../MagExperimentGenerator.h"
 #include "../mobj.h"
 #include "field_cpu.h"
+#include "mesh_cpu.h"
 
 namespace grafen_test {
 
