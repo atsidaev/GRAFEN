@@ -186,7 +186,7 @@ public:
 		return solve(qsCUDA.cbegin(), qsCUDA.cend(), p0, transpose);
 	}
 
-protected:
+	// Must be public: NVCC rejects __host__ __device__ lambdas in protected/private members.
 	static Point solve(const typename dvHex::const_iterator &qbegin, const typename dvHex::const_iterator &qend, const Point &p0, const bool transpose) {
 		Point res;
 		const auto& triKr = [=] __device__ __host__(const ClosedShape &shape)->Point {
@@ -204,7 +204,8 @@ protected:
 
 		return res;
 	}
-	
+
+protected:
 	dvHex qsCUDA;			//ro
 };
 

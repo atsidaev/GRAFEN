@@ -231,10 +231,13 @@ public:
 
 	CUDA_HOST_DEV_FUN Triangle() {}
 	CUDA_HOST_DEV_FUN Triangle(const Point3D<T> a, const Point3D<T> b, const Point3D<T> c) : p1(a), p2(b), p3(c) {}
-	
+
+	/** Convert from another triangle type (e.g. Triangle<double> → Triangle<float>).
+	 *  Init members directly: delegating to Triangle(p1,p2,p3) fails under NVCC/HIP
+	 *  when point scalar types differ. */
 	template<typename TriangleLike,
-    	typename = std::enable_if_t<std::is_class<TriangleLike>::value>>	//this constructor only for when TriangleLike is a class
-	CUDA_HOST_DEV_FUN Triangle(const TriangleLike& t) : Triangle(t.p1, t.p2, t.p3) {}
+    	typename = std::enable_if_t<std::is_class<TriangleLike>::value>>
+	CUDA_HOST_DEV_FUN Triangle(const TriangleLike& t) : p1(t.p1), p2(t.p2), p3(t.p3) {}
 
 	CUDA_HOST_DEV_FUN Point3D<T> convert(const T u, const T v) const {
 		const T x = p1.x + (p3.x-p1.x)*u + (p2.x-p1.x)*v;
