@@ -127,9 +127,9 @@ public:
 	CUDA_HOST_DEV_FUN Point3D(const T v) : Point3D(v, v, v) {}
 	CUDA_HOST_DEV_FUN Point3D() : Point3D(0) {}
 	CUDA_HOST_DEV_FUN Point3D(const Point2D &p, const T z = 0) : Point3D(p.x, p.y, z) {}
-	template<typename Point3DLike,
-    	typename = std::enable_if_t<std::is_class<Point3DLike>::value>>	//this constructor only for when Point3DLike is a class
-	CUDA_HOST_DEV_FUN Point3D(const Point3DLike& p) : x(p.x), y(p.y), z(p.z) {}
+	/** Cross-precision copy (e.g. Point3D<double> → Point3D<float>). */
+	template<typename U>
+	CUDA_HOST_DEV_FUN Point3D(const Point3D<U>& p) : x(T(p.x)), y(T(p.y)), z(T(p.z)) {}
 	
 	CUDA_HOST_DEV_FUN operator Point2D() const {
 		return { x, y };
@@ -232,12 +232,12 @@ public:
 	CUDA_HOST_DEV_FUN Triangle() {}
 	CUDA_HOST_DEV_FUN Triangle(const Point3D<T> a, const Point3D<T> b, const Point3D<T> c) : p1(a), p2(b), p3(c) {}
 
-	/** Convert from another triangle type (e.g. Triangle<double> → Triangle<float>).
-	 *  Init members directly: delegating to Triangle(p1,p2,p3) fails under NVCC/HIP
-	 *  when point scalar types differ. */
-	template<typename TriangleLike,
-    	typename = std::enable_if_t<std::is_class<TriangleLike>::value>>
-	CUDA_HOST_DEV_FUN Triangle(const TriangleLike& t) : p1(t.p1), p2(t.p2), p3(t.p3) {}
+	/** Triangle<double> → Triangle<float> for CUDA kernel (no enable_if — NVCC). */
+	template<typename U>
+	CUDA_HOST_DEV_FUN Triangle(const Triangle<U>& t)
+		: p1(T(t.p1.x), T(t.p1.y), T(t.p1.z))
+		, p2(T(t.p2.x), T(t.p2.y), T(t.p2.z))
+		, p3(T(t.p3.x), T(t.p3.y), T(t.p3.z)) {}
 
 	CUDA_HOST_DEV_FUN Point3D<T> convert(const T u, const T v) const {
 		const T x = p1.x + (p3.x-p1.x)*u + (p2.x-p1.x)*v;

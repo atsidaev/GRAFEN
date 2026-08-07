@@ -74,7 +74,11 @@ __host__ __device__ static Point intHexTr(const Point &p0, const ClosedShape &sh
 	const Point3D<T> p0f(p0);
 	const Point3D<T> densf(shape.dens);
 	for (int i = 0; i < shape.nTriangles; ++i) {
-		const Triangle<T> tri(shape.getTri(i));
+		const Triangle<double> tri_d = shape.getTri(i);
+		const Triangle<T> tri(
+			Point3D<T>(T(tri_d.p1.x), T(tri_d.p1.y), T(tri_d.p1.z)),
+			Point3D<T>(T(tri_d.p2.x), T(tri_d.p2.y), T(tri_d.p2.z)),
+			Point3D<T>(T(tri_d.p3.x), T(tri_d.p3.y), T(tri_d.p3.z)));
 		const auto v = constexpr_if<Transpose>(
 			tri.normal() * (intTrAn<T>(p0f, tri) ^ densf),
 			intTrAn<T>(p0f, tri) * (tri.normal() ^ densf)
