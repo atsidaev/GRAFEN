@@ -109,31 +109,41 @@ def uv_sphere_surface_stl(radius: float, n_lat: int = 32, n_lon: int = 64) -> np
 
 
 def _uv_ellipsoid_surface_stl(req: float, rpl: float, n_lat: int, n_lon: int) -> np.ndarray:
-    """Ellipsoid of revolution (x,y equatorial req; z polar rpl)."""
-    lats = np.linspace(-0.5 * np.pi, 0.5 * np.pi, n_lat + 1)
+    """Ellipsoid of revolution (x,y equatorial req; z polar rpl), closed at poles."""
+    # Interior latitude rings + explicit poles (avoids open caps / missed polar rays)
+    if n_lat < 2:
+        raise ValueError("n_lat must be >= 2")
+    lats = np.linspace(-0.5 * np.pi, 0.5 * np.pi, n_lat + 1)[1:-1]
     lons = np.linspace(0.0, 2.0 * np.pi, n_lon + 1)
-    tris: list[np.ndarray] = []
-    for i in range(n_lat):
-        for j in range(n_lon):
-            def pt(la: float, lo: float) -> np.ndarray:
-                return np.array(
-                    [
-                        req * np.cos(la) * np.cos(lo),
-                        req * np.cos(la) * np.sin(lo),
-                        rpl * np.sin(la),
-                    ],
-                    dtype=np.float64,
-                )
+    south = np.array([0.0, 0.0, -rpl], dtype=np.float64)
+    north = np.array([0.0, 0.0, rpl], dtype=np.float64)
 
+    def pt(la: float, lo: float) -> np.ndarray:
+        return np.array(
+            [
+                req * np.cos(la) * np.cos(lo),
+                req * np.cos(la) * np.sin(lo),
+                rpl * np.sin(la),
+            ],
+            dtype=np.float64,
+        )
+
+    tris: list[np.ndarray] = []
+    # south polar fan
+    for j in range(n_lon):
+        tris.append(np.stack([south, pt(lats[0], lons[j]), pt(lats[0], lons[j + 1])]))
+    # belts between latitude rings
+    for i in range(len(lats) - 1):
+        for j in range(n_lon):
             p00 = pt(lats[i], lons[j])
             p01 = pt(lats[i], lons[j + 1])
             p10 = pt(lats[i + 1], lons[j])
             p11 = pt(lats[i + 1], lons[j + 1])
-            # skip degenerate caps
-            if np.linalg.norm(p00 - p01) > 1e-14 and np.linalg.norm(p00 - p10) > 1e-14:
-                tris.append(np.stack([p00, p10, p11]))
-            if np.linalg.norm(p00 - p01) > 1e-14 and np.linalg.norm(p01 - p11) > 1e-14:
-                tris.append(np.stack([p00, p11, p01]))
+            tris.append(np.stack([p00, p10, p11]))
+            tris.append(np.stack([p00, p11, p01]))
+    # north polar fan
+    for j in range(n_lon):
+        tris.append(np.stack([north, pt(lats[-1], lons[j + 1]), pt(lats[-1], lons[j])]))
     return np.stack(tris, axis=0)
 
 

@@ -16,6 +16,7 @@ from grafen.stl_io import read_stl, stl_bbox
 
 from .conftest import (
     CUBE_BOUNDS,
+    ELLIPSOID_CENTER,
     ELLIPSOID_REQ,
     ELLIPSOID_RPL,
     SPHERE_CENTER,
@@ -176,3 +177,45 @@ def test_voxelize_rejects_empty(stl_files):
             0.0,
             bounds=((100.0, 110.0), (100.0, 110.0), (100.0, 110.0)),
         )
+
+
+def test_polar_sphere_cell_count_and_center(stl_files, tmp_path):
+    from grafen.stl_convert import convert_stl_to_vtu, polar_mesh_stl
+
+    K = 2.0
+    i0 = H_PRIME * K
+    nl, nb, nr = 12, 6, 3
+    corners, dens, kappa = convert_stl_to_vtu(
+        stl_files / "sphere.stl",
+        tmp_path / "sphere_polar.vtu",
+        magnetization=i0,
+        kappa=K,
+        method="polar",
+        nl=nl,
+        nb=nb,
+        nr=nr,
+        center=SPHERE_CENTER,
+    )
+    assert corners.shape[0] == nl * nb * nr
+    assert np.allclose(dens, i0)
+    assert np.allclose(kappa, K)
+    # Outermost radial shell (last nr block in generation order: ri slowest… actually ri outer loop)
+    # cells ordered ri, li, bi → last nl*nb cells are outer shell
+    outer_cells = corners[-(nl * nb) :]
+    outer = outer_cells[:, :4, :].reshape(-1, 3)
+    r = np.linalg.norm(outer - SPHERE_CENTER, axis=1)
+    assert np.allclose(r, SPHERE_R, rtol=0.08, atol=0.5)
+
+
+def test_polar_ellipsoid_fills_better_than_coarse_voxel(stl_files):
+    """Polar mesh keeps all angular×radial cells; coarse voxel leaves gaps."""
+    from grafen.stl_convert import polar_mesh_stl, voxelize_stl
+
+    tris = read_stl(stl_files / "ellipsoid.stl")
+    i0 = H_PRIME * 2.0
+    c_pol, _, _ = polar_mesh_stl(tris, 16, 8, 4, i0, 2.0, center=ELLIPSOID_CENTER)
+    c_vox, _, _ = voxelize_stl(tris, 8, 8, 12, i0, 2.0)
+    assert c_pol.shape[0] == 16 * 8 * 4
+    # Voxel of similar cell count under-fills the AABB; polar is body-fitted
+    assert c_vox.shape[0] < 8 * 8 * 12
+    assert c_pol.shape[0] >= c_vox.shape[0]

@@ -39,11 +39,17 @@ Convert a closed (watertight) STL into a GRAFEN hex VTU by voxelizing the
 bounding box and keeping cells whose centers lie inside the surface:
 
 ```bash
+# AABB voxel fill (default)
 python tools/stl_to_vtu.py model.stl model.vtu --nx 32 --ny 32 --nz 32 \
+  -k 2 -H 14 14 35
+
+# Polar / tesseroid-like hexes from the body center (star-convex shapes)
+python tools/stl_to_vtu.py ellipsoid.stl ell.vtu --polar --nl 24 --nb 12 --nr 6 \
   -k 2 -H 14 14 35
 ```
 
-(``-H`` stores ``I0 = κ H'``; ``-I`` is an optional alternative.)
+(``-H`` stores ``I0 = κ H'``; ``-I`` is an optional alternative.
+``--polar`` needs a center inside the body; default is the STL bbox center.)
 
 
 Optional `--bounds x0 x1 y0 y1 z0 z1` overrides the STL AABB; `--pad` expands it.
