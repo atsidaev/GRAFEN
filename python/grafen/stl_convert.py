@@ -138,6 +138,78 @@ def stl_geometric_center(triangles: np.ndarray) -> np.ndarray:
     return 0.5 * (lo + hi)
 
 
+def _resolve_mesh_center(triangles: np.ndarray, center: np.ndarray | None) -> np.ndarray:
+    tris = np.asarray(triangles, dtype=np.float64)
+    if center is None:
+        c = stl_geometric_center(tris)
+    else:
+        c = np.asarray(center, dtype=np.float64).reshape(3)
+    if not bool(points_inside_stl(c.reshape(1, 3), tris)[0]):
+        raise ValueError(
+            "mesh center is not inside the STL; "
+            "pass --center inside a star-convex body"
+        )
+    return c
+
+
+def _stl_vertex_dirs(center: np.ndarray, triangles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    rel_v = triangles.reshape(-1, 3) - center.reshape(1, 3)
+    nrm = np.maximum(np.linalg.norm(rel_v, axis=1), 1e-30)
+    return rel_v, rel_v / nrm[:, None]
+
+
+def _surface_radius(
+    center: np.ndarray,
+    direction: np.ndarray,
+    triangles: np.ndarray,
+    rel_v: np.ndarray,
+    vdir: np.ndarray,
+) -> float:
+    """Exit distance along ``direction``; robust to Möller–Trumbore edge misses."""
+    direction = np.asarray(direction, dtype=np.float64).reshape(3)
+    dn = np.linalg.norm(direction)
+    if dn < 1e-30:
+        return float("nan")
+    direction = direction / dn
+
+    t = _ray_first_hit_t(center, direction, triangles)
+    if np.isfinite(t) and t > 0.0:
+        return t
+
+    for scale in (1e-4, 1e-3, 1e-2):
+        for axis in (0, 1, 2):
+            jitter = np.zeros(3)
+            jitter[axis] = scale
+            for sign in (1.0, -1.0):
+                d2 = direction + sign * jitter
+                d2 = d2 / np.linalg.norm(d2)
+                t2 = _ray_first_hit_t(center, d2, triangles)
+                if np.isfinite(t2) and t2 > 0.0:
+                    return t2
+
+    cosang = vdir @ direction
+    for thr in (0.995, 0.98, 0.95, 0.9):
+        sel = cosang >= thr
+        if np.any(sel):
+            return float(np.max(rel_v[sel] @ direction))
+    return float("nan")
+
+
+def _unit_cube_point(face: int, u: float, v: float) -> np.ndarray:
+    """Point on the surface of the unit cube [-1,1]^3 (one of 6 faces)."""
+    if face == 0:
+        return np.array([1.0, u, v], dtype=np.float64)
+    if face == 1:
+        return np.array([-1.0, u, v], dtype=np.float64)
+    if face == 2:
+        return np.array([u, 1.0, v], dtype=np.float64)
+    if face == 3:
+        return np.array([u, -1.0, v], dtype=np.float64)
+    if face == 4:
+        return np.array([u, v, 1.0], dtype=np.float64)
+    return np.array([u, v, -1.0], dtype=np.float64)
+
+
 def polar_mesh_stl(
     triangles: np.ndarray,
     nl: int,
@@ -162,55 +234,8 @@ def polar_mesh_stl(
         raise ValueError("nl, nb, nr must be >= 1")
     tris = np.asarray(triangles, dtype=np.float64)
     magnetization = np.asarray(magnetization, dtype=float).reshape(3)
-    if center is None:
-        center = stl_geometric_center(tris)
-    else:
-        center = np.asarray(center, dtype=np.float64).reshape(3)
-
-    if not bool(points_inside_stl(center.reshape(1, 3), tris)[0]):
-        raise ValueError(
-            "polar_mesh_stl: center is not inside the STL; "
-            "pass --center inside a star-convex body"
-        )
-
-    verts = tris.reshape(-1, 3)
-    rel_v = verts - center.reshape(1, 3)
-    vnorm = np.linalg.norm(rel_v, axis=1)
-    vnorm_safe = np.maximum(vnorm, 1e-30)
-    vdir = rel_v / vnorm_safe[:, None]
-
-    def surface_radius(direction: np.ndarray) -> float:
-        """Exit distance along unit ``direction``; robust to MT edge misses."""
-        direction = np.asarray(direction, dtype=np.float64).reshape(3)
-        dn = np.linalg.norm(direction)
-        if dn < 1e-30:
-            return float("nan")
-        direction = direction / dn
-
-        t = _ray_first_hit_t(center, direction, tris)
-        if np.isfinite(t) and t > 0.0:
-            return t
-
-        # Grazing hit on STL edges (common when ray lies in a coordinate plane):
-        # retry with tiny angular jitters.
-        for scale in (1e-4, 1e-3, 1e-2):
-            for axis in (0, 1, 2):
-                jitter = np.zeros(3)
-                jitter[axis] = scale
-                for sign in (1.0, -1.0):
-                    d2 = direction + sign * jitter
-                    d2 = d2 / np.linalg.norm(d2)
-                    t2 = _ray_first_hit_t(center, d2, tris)
-                    if np.isfinite(t2) and t2 > 0.0:
-                        return t2
-
-        # Last resort: support among vertices nearly along this ray (not all verts)
-        cosang = vdir @ direction
-        for thr in (0.995, 0.98, 0.95, 0.9):
-            sel = cosang >= thr
-            if np.any(sel):
-                return float(np.max(rel_v[sel] @ direction))
-        return float("nan")
+    center = _resolve_mesh_center(tris, center)
+    rel_v, vdir = _stl_vertex_dirs(center, tris)
 
     # Full sphere: β ∈ [-π/2, π/2]; λ offset by half step so rays avoid
     # coordinate-plane triangle edges (λ=0,π) that make Möller–Trumbore miss.
@@ -222,7 +247,7 @@ def polar_mesh_stl(
     for bi in range(nb + 1):
         for li in range(nl):
             d = _spherical_unit(float(b[bi]), float(lam[li]))
-            t = surface_radius(d)
+            t = _surface_radius(center, d, tris, rel_v, vdir)
             if not np.isfinite(t) or t <= 0.0:
                 raise ValueError(
                     f"polar_mesh_stl: no surface hit for direction "
@@ -260,6 +285,97 @@ def polar_mesh_stl(
                 cells.append(np.vstack([external, internal]))
 
     corners = np.stack(cells, axis=0)
+    dens = np.tile(magnetization, (corners.shape[0], 1))
+    kappa_arr = np.full(corners.shape[0], float(kappa), dtype=float)
+    return corners, dens, kappa_arr
+
+
+def cubed_sphere_mesh_stl(
+    triangles: np.ndarray,
+    n: int,
+    nr: int,
+    magnetization: np.ndarray,
+    kappa: float,
+    *,
+    center: np.ndarray | None = None,
+    inner_frac: float = 0.9,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Cubed-sphere hex mesh: inner equal cube + radial shells to the STL.
+
+    Each of the 6 cube faces is an ``n×n`` grid. Rays from ``center`` through
+    those nodes hit the STL; ``nr`` shells interpolate (planar faces) between
+    the inner cube and the surface. Body must be star-convex w.r.t. ``center``.
+
+    Cell count = ``n**3 + 6 * n * n * nr``.
+    """
+    if n < 1 or nr < 1:
+        raise ValueError("n and nr must be >= 1")
+    if not (0.0 < inner_frac < 1.0):
+        raise ValueError("inner_frac must be in (0, 1)")
+    tris = np.asarray(triangles, dtype=np.float64)
+    magnetization = np.asarray(magnetization, dtype=float).reshape(3)
+    center = _resolve_mesh_center(tris, center)
+    rel_v, vdir = _stl_vertex_dirs(center, tris)
+
+    g = np.linspace(-1.0, 1.0, n + 1)
+    p_inner = np.empty((6, n + 1, n + 1, 3), dtype=np.float64)
+    p_surf = np.empty((6, n + 1, n + 1, 3), dtype=np.float64)
+    s_limit = np.inf
+    for face in range(6):
+        for iu in range(n + 1):
+            for iv in range(n + 1):
+                c_uv = _unit_cube_point(face, float(g[iu]), float(g[iv]))
+                cn = float(np.linalg.norm(c_uv))
+                d = c_uv / cn
+                r = _surface_radius(center, d, tris, rel_v, vdir)
+                if not np.isfinite(r) or r <= 0.0:
+                    raise ValueError(
+                        "cubed_sphere_mesh_stl: no surface hit; "
+                        "body may not be star-convex at the cube-face node"
+                    )
+                s_limit = min(s_limit, r / cn)
+                p_surf[face, iu, iv] = center + r * d
+                p_inner[face, iu, iv] = c_uv
+
+    s = float(inner_frac) * float(s_limit)
+    if s <= 0.0:
+        raise ValueError("cubed_sphere_mesh_stl: inner cube size is non-positive")
+    p_inner = center.reshape(1, 1, 1, 3) + s * p_inner
+
+    core, dens_core = cube_mesh(
+        (center[0] - s, center[0] + s, n),
+        (center[1] - s, center[1] + s, n),
+        (center[2] - s, center[2] + s, n),
+        magnetization=magnetization,
+    )
+    del dens_core
+
+    # Flip u on faces where (u1,v1),(u1,v0),(u0,v1) would invert the hex
+    # (+X, -Y, +Z keep GRAFEN order; -X, +Y, -Z reverse u)
+    flip_u = (False, True, True, False, False, True)
+
+    shells: list[np.ndarray] = []
+    for face in range(6):
+        for ri in range(nr):
+            t0 = float(ri) / float(nr)
+            t1 = float(ri + 1) / float(nr)
+            for i in range(n):
+                for j in range(n):
+                    if flip_u[face]:
+                        iu0, iu1 = i + 1, i
+                    else:
+                        iu0, iu1 = i, i + 1
+                    iv0, iv1 = j, j + 1
+                    nodes = ((iu1, iv1), (iu1, iv0), (iu0, iv1), (iu0, iv0))
+                    external = np.empty((4, 3), dtype=np.float64)
+                    internal = np.empty((4, 3), dtype=np.float64)
+                    for k, (iu, iv) in enumerate(nodes):
+                        internal[k] = (1.0 - t0) * p_inner[face, iu, iv] + t0 * p_surf[face, iu, iv]
+                        external[k] = (1.0 - t1) * p_inner[face, iu, iv] + t1 * p_surf[face, iu, iv]
+                    shells.append(np.vstack([external, internal]))
+
+    shell_corners = np.stack(shells, axis=0)
+    corners = np.concatenate([core, shell_corners], axis=0)
     dens = np.tile(magnetization, (corners.shape[0], 1))
     kappa_arr = np.full(corners.shape[0], float(kappa), dtype=float)
     return corners, dens, kappa_arr
@@ -335,13 +451,14 @@ def stl_to_hex_model(
     nl: int = 16,
     nb: int = 8,
     nr: int = 4,
+    n: int = 8,
     bounds: tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None = None,
     pad: float = 0.0,
     center: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Read STL and build a volumetric hex model (``voxel`` or ``polar``)."""
+    """Read STL and build a volumetric hex model (``voxel``, ``polar``, or ``cubed-sphere``)."""
     tris = read_stl(stl_path)
-    method = method.lower().strip()
+    method = method.lower().strip().replace("_", "-")
     if method == "voxel":
         return voxelize_stl(
             tris,
@@ -363,7 +480,16 @@ def stl_to_hex_model(
             kappa,
             center=center,
         )
-    raise ValueError(f"Unknown meshing method {method!r}; use voxel|polar")
+    if method in ("cubed-sphere", "cubedsphere"):
+        return cubed_sphere_mesh_stl(
+            tris,
+            n,
+            nr,
+            magnetization,
+            kappa,
+            center=center,
+        )
+    raise ValueError(f"Unknown meshing method {method!r}; use voxel|polar|cubed-sphere")
 
 
 def convert_stl_to_vtu(
@@ -379,6 +505,7 @@ def convert_stl_to_vtu(
     nl: int = 16,
     nb: int = 8,
     nr: int = 4,
+    n: int = 8,
     bounds: tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None = None,
     pad: float = 0.0,
     center: np.ndarray | None = None,
@@ -394,6 +521,7 @@ def convert_stl_to_vtu(
         nl=nl,
         nb=nb,
         nr=nr,
+        n=n,
         bounds=bounds,
         pad=pad,
         center=center,
@@ -406,8 +534,8 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=(
             "Convert a closed STL surface to a GRAFEN hex VTU. "
-            "Default: AABB voxel fill. With --polar: spherical sectors from the "
-            "body center out to the surface (planar-faced radial hexes)."
+            "Default: AABB voxel fill. --polar: lat/lon radial hexes. "
+            "--cubed-sphere: inner equal cube + 6-face radial shells to the surface."
         ),
     )
     p.add_argument("stl", type=Path, help="Input .stl (closed / watertight)")
@@ -437,19 +565,33 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Polar meshing from geometric center (star-convex bodies)",
     )
+    p.add_argument(
+        "--cubed-sphere",
+        action="store_true",
+        dest="cubed_sphere",
+        help="Cubed-sphere meshing: inner cube + radial shells (star-convex bodies)",
+    )
     p.add_argument("--nx", type=int, default=16, help="voxel: cells along X (default 16)")
     p.add_argument("--ny", type=int, default=16, help="voxel: cells along Y (default 16)")
     p.add_argument("--nz", type=int, default=16, help="voxel: cells along Z (default 16)")
     p.add_argument("--nl", type=int, default=16, help="polar: longitude cells (default 16)")
     p.add_argument("--nb", type=int, default=8, help="polar: latitude cells (default 8)")
-    p.add_argument("--nr", type=int, default=4, help="polar: radial shells (default 4)")
+    p.add_argument("--nr", type=int, default=4, help="polar/cubed-sphere: radial shells (default 4)")
+    p.add_argument(
+        "-n",
+        "--n",
+        dest="n",
+        type=int,
+        default=8,
+        help="cubed-sphere: cells per cube-face edge (default 8)",
+    )
     p.add_argument(
         "--center",
         type=float,
         nargs=3,
         default=None,
         metavar=("x", "y", "z"),
-        help="polar: mesh center (default: STL bbox center; must be inside)",
+        help="polar/cubed-sphere: mesh center (default: STL bbox center; must be inside)",
     )
     p.add_argument(
         "--bounds",
@@ -481,8 +623,15 @@ def main(argv: list[str] | None = None) -> int:
     else:
         magnetization = np.zeros(3)
 
+    if args.polar and args.cubed_sphere:
+        p.error("use either --polar or --cubed-sphere, not both")
     center = None if args.center is None else np.array(args.center, dtype=float)
-    method = "polar" if args.polar else "voxel"
+    if args.cubed_sphere:
+        method = "cubed-sphere"
+    elif args.polar:
+        method = "polar"
+    else:
+        method = "voxel"
     corners, dens, kappa = convert_stl_to_vtu(
         args.stl,
         args.vtu,
@@ -495,6 +644,7 @@ def main(argv: list[str] | None = None) -> int:
         nl=args.nl,
         nb=args.nb,
         nr=args.nr,
+        n=args.n,
         bounds=bounds,
         pad=args.pad,
         center=center,

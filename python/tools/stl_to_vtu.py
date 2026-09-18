@@ -7,6 +7,9 @@ Examples:
 
   python tools/stl_to_vtu.py tests/data/ellipsoid.stl /tmp/ell.vtu \\
       --polar --nl 24 --nb 12 --nr 6 -k 2 -H 14 14 35
+
+  python tools/stl_to_vtu.py tests/data/ellipsoid.stl /tmp/ell.vtu \\
+      --cubed-sphere -n 12 --nr 6 -k 2 -H 14 14 35
 """
 
 from __future__ import annotations

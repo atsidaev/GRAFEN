@@ -219,3 +219,53 @@ def test_polar_ellipsoid_fills_better_than_coarse_voxel(stl_files):
     # Voxel of similar cell count under-fills the AABB; polar is body-fitted
     assert c_vox.shape[0] < 8 * 8 * 12
     assert c_pol.shape[0] >= c_vox.shape[0]
+
+
+def test_cubed_sphere_sphere_count_and_surface(stl_files, tmp_path):
+    from grafen.stl_convert import convert_stl_to_vtu
+
+    K = 2.0
+    i0 = H_PRIME * K
+    n, nr = 6, 3
+    corners, dens, kappa = convert_stl_to_vtu(
+        stl_files / "sphere.stl",
+        tmp_path / "sphere_cubed.vtu",
+        magnetization=i0,
+        kappa=K,
+        method="cubed-sphere",
+        n=n,
+        nr=nr,
+        center=SPHERE_CENTER,
+    )
+    assert corners.shape[0] == n**3 + 6 * n * n * nr
+    assert np.allclose(dens, i0)
+    assert np.allclose(kappa, K)
+    # Outer vertices: last radial layer of each of the 6 faces
+    face_block = n * n * nr
+    outer_parts = []
+    for f in range(6):
+        off = n**3 + f * face_block + (nr - 1) * n * n
+        outer_parts.append(corners[off : off + n * n, :4, :])
+    outer = np.concatenate(outer_parts, axis=0).reshape(-1, 3)
+    r = np.linalg.norm(outer - SPHERE_CENTER, axis=1)
+    assert np.allclose(r, SPHERE_R, rtol=0.08, atol=0.5)
+    # Inner cube vertices must stay strictly inside the sphere
+    core = corners[: n**3]
+    r_core = np.linalg.norm(core.reshape(-1, 3) - SPHERE_CENTER, axis=1)
+    assert r_core.max() < SPHERE_R * 0.99
+
+
+def test_cubed_sphere_ellipsoid_verts_inside(stl_files):
+    from grafen.stl_convert import cubed_sphere_mesh_stl
+
+    tris = read_stl(stl_files / "ellipsoid.stl")
+    n, nr = 8, 4
+    corners, _, _ = cubed_sphere_mesh_stl(
+        tris, n, nr, H_PRIME * 2.0, 2.0, center=ELLIPSOID_CENTER
+    )
+    assert corners.shape[0] == n**3 + 6 * n * n * nr
+    rel = corners.reshape(-1, 3) - ELLIPSOID_CENTER
+    f = (rel[:, 0] / ELLIPSOID_REQ) ** 2 + (rel[:, 1] / ELLIPSOID_REQ) ** 2 + (
+        rel[:, 2] / ELLIPSOID_RPL
+    ) ** 2
+    assert f.max() < 1.02
