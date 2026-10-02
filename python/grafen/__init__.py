@@ -1,5 +1,6 @@
 """GRAFEN: forward magnetic modelling with self-demagnetization (Python port)."""
 
+from .accuracy import run_accuracy
 from .analytic import (
     cuboid_field_uniform,
     ellipsoid_magnetization,
@@ -13,12 +14,14 @@ from .model_io import load_model, save_model
 from .stl_convert import (
     convert_stl_to_vtu,
     cubed_sphere_mesh_stl,
+    talwani_mesh_stl,
     polar_mesh_stl,
     stl_to_hex_model,
     voxelize_stl,
 )
 
 __all__ = [
+    "run_accuracy",
     "cuboid_field_uniform",
     "ellipsoid_magnetization",
     "sphere_field_exterior",
@@ -36,6 +39,7 @@ __all__ = [
     "save_model",
     "convert_stl_to_vtu",
     "cubed_sphere_mesh_stl",
+    "talwani_mesh_stl",
     "polar_mesh_stl",
     "stl_to_hex_model",
     "voxelize_stl",

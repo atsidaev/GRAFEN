@@ -269,3 +269,46 @@ def test_cubed_sphere_ellipsoid_verts_inside(stl_files):
         rel[:, 2] / ELLIPSOID_RPL
     ) ** 2
     assert f.max() < 1.02
+
+
+def test_talwani_cube_matches_voxel(stl_files, tmp_path):
+    """Axis-aligned box: Talwani slices keep the same cells as 3D voxel fill."""
+    i0 = H_PRIME * 0.2
+    kw = dict(magnetization=i0, kappa=0.2, nx=4, ny=2, nz=2, bounds=CUBE_BOUNDS)
+    c_v, d_v, _ = convert_stl_to_vtu(stl_files / "cube.stl", tmp_path / "v.vtu", **kw)
+    c_t, d_t, _ = convert_stl_to_vtu(
+        stl_files / "cube.stl", tmp_path / "t.vtu", method="talwani", **kw
+    )
+    assert c_t.shape == c_v.shape
+    assert np.allclose(c_v, c_t, atol=1e-12)
+    assert np.allclose(d_v, d_t, atol=1e-12)
+
+
+def test_talwani_sphere_agrees_with_voxel(stl_files):
+    from grafen.stl_convert import talwani_mesh_stl, voxelize_stl
+
+    tris = read_stl(stl_files / "sphere.stl")
+    i0 = H_PRIME * 2.0
+    c_v, _, _ = voxelize_stl(tris, 12, 12, 12, i0, 2.0)
+    c_t, _, _ = talwani_mesh_stl(tris, 12, 12, 12, i0, 2.0)
+    assert c_t.shape[0] > 100
+    # Same polyhedron: 2D slice even-odd ≡ 3D interior except numeric boundary cells
+    ctr_v = np.round(c_v.mean(axis=1), 6)
+    ctr_t = np.round(c_t.mean(axis=1), 6)
+    set_v = set(map(tuple, ctr_v))
+    set_t = set(map(tuple, ctr_t))
+    overlap = len(set_v & set_t)
+    assert overlap / max(len(set_v), 1) > 0.95
+    assert overlap / max(len(set_t), 1) > 0.95
+
+
+def test_talwani_slice_square_inside():
+    from grafen.stl_io import cube_surface_stl
+    from grafen.stl_convert import points_inside_slice_2d, talwani_slice_segments
+
+    tris = cube_surface_stl(((-1.0, 1.0), (-1.0, 1.0), (-1.0, 1.0)))
+    segs = talwani_slice_segments(tris, 0.0)
+    assert segs.shape[0] >= 4
+    xy = np.array([[0.0, 0.0], [0.5, 0.5], [1.5, 0.0], [0.0, 1.5]])
+    inside = points_inside_slice_2d(xy, segs)
+    assert inside.tolist() == [True, True, False, False]

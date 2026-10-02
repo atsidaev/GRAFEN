@@ -381,6 +381,184 @@ def cubed_sphere_mesh_stl(
     return corners, dens, kappa_arr
 
 
+def talwani_slice_segments(
+    triangles: np.ndarray,
+    z: float,
+    *,
+    zmin: np.ndarray | None = None,
+    zmax: np.ndarray | None = None,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    """XY line segments where a closed triangle mesh meets the plane ``z``.
+
+    Returns
+    -------
+    segments : (S, 2, 2)  each row is ``((x1,y1), (x2,y2))``
+    """
+    tris = np.asarray(triangles, dtype=np.float64)
+    if tris.size == 0:
+        return np.empty((0, 2, 2), dtype=np.float64)
+    zz = float(z)
+    # Nudge off vertices so edges strictly straddle the plane
+    zz = zz + (1e-8 * (1.0 + abs(zz)) + eps)
+    if zmin is None:
+        zmin = tris[:, :, 2].min(axis=1)
+    if zmax is None:
+        zmax = tris[:, :, 2].max(axis=1)
+    cand = (zmin < zz) & (zmax > zz)
+    if not np.any(cand):
+        return np.empty((0, 2, 2), dtype=np.float64)
+
+    v0 = tris[cand, 0]
+    v1 = tris[cand, 1]
+    v2 = tris[cand, 2]
+
+    def _hits(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        za = a[:, 2] - zz
+        zb = b[:, 2] - zz
+        cross = za * zb < 0.0
+        out = np.full((a.shape[0], 2), np.nan, dtype=np.float64)
+        if np.any(cross):
+            t = za[cross] / (za[cross] - zb[cross])
+            out[cross] = a[cross, :2] + t[:, None] * (b[cross, :2] - a[cross, :2])
+        return out
+
+    pts = np.stack([_hits(v0, v1), _hits(v1, v2), _hits(v2, v0)], axis=1)
+    valid = np.isfinite(pts).all(axis=2)
+    two = valid.sum(axis=1) == 2
+    if not np.any(two):
+        return np.empty((0, 2, 2), dtype=np.float64)
+    pts = pts[two]
+    rows, cols = np.where(valid[two])
+    segs = pts[rows, cols].reshape(-1, 2, 2)
+    d = segs[:, 1] - segs[:, 0]
+    keep = np.sum(d * d, axis=1) > 1e-24
+    return segs[keep]
+
+
+def points_inside_slice_2d(xy: np.ndarray, segments: np.ndarray) -> np.ndarray:
+    """Even-odd test of 2D points against unordered closed contours (segments)."""
+    xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+    segs = np.asarray(segments, dtype=np.float64)
+    n = xy.shape[0]
+    if n == 0:
+        return np.zeros(0, dtype=bool)
+    if segs.shape[0] == 0:
+        return np.zeros(n, dtype=bool)
+
+    x1 = segs[:, 0, 0]
+    y1 = segs[:, 0, 1]
+    x2 = segs[:, 1, 0]
+    y2 = segs[:, 1, 1]
+    dy = y2 - y1
+    inside = np.zeros(n, dtype=bool)
+    chunk = max(1, min(n, 4096))
+    for start in range(0, n, chunk):
+        p = xy[start : start + chunk]
+        px = p[:, 0][:, None]
+        py = p[:, 1][:, None]
+        dy_safe = np.where(np.abs(dy) > 1e-30, dy, 1.0)
+        cross = (y1[None, :] > py) != (y2[None, :] > py)
+        cross &= np.abs(dy)[None, :] > 1e-30
+        xint = x1[None, :] + (py - y1[None, :]) / dy_safe[None, :] * (x2 - x1)[None, :]
+        hits = cross & (xint > px)
+        inside[start : start + p.shape[0]] = (hits.sum(axis=1) % 2) == 1
+    return inside
+
+
+def _raster_inside_xy(
+    xs_c: np.ndarray,
+    ys_c: np.ndarray,
+    segments: np.ndarray,
+) -> np.ndarray:
+    """Even-odd fill of a regular XY center grid; ``(ny, nx)`` bool, row = y."""
+    xs_c = np.asarray(xs_c, dtype=np.float64)
+    ys_c = np.asarray(ys_c, dtype=np.float64)
+    segs = np.asarray(segments, dtype=np.float64)
+    ny = ys_c.shape[0]
+    nx = xs_c.shape[0]
+    out = np.zeros((ny, nx), dtype=bool)
+    if segs.shape[0] == 0:
+        return out
+    x1 = segs[:, 0, 0]
+    y1 = segs[:, 0, 1]
+    x2 = segs[:, 1, 0]
+    y2 = segs[:, 1, 1]
+    dy = y2 - y1
+    for j, y in enumerate(ys_c):
+        cross = (y1 > y) != (y2 > y)
+        cross &= np.abs(dy) > 1e-30
+        if not np.any(cross):
+            continue
+        xint = x1[cross] + (y - y1[cross]) / dy[cross] * (x2[cross] - x1[cross])
+        xint.sort()
+        n_right = xint.size - np.searchsorted(xint, xs_c, side="right")
+        out[j] = (n_right % 2) == 1
+    return out
+
+
+def talwani_mesh_stl(
+    triangles: np.ndarray,
+    nx: int,
+    ny: int,
+    nz: int,
+    magnetization: np.ndarray,
+    kappa: float,
+    *,
+    bounds: tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None = None,
+    pad: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Talwani stacked-prism hexes: XY fill of STL slices at each cell mid-Z.
+
+    Same AABB grid as ``voxelize_stl``, but the inside test is 2D even-odd on
+    the horizontal contour (no 3D ray vs every triangle). Multiple polygons
+    per slice (e.g. comet lobes) are summed automatically.
+    """
+    if nx < 1 or ny < 1 or nz < 1:
+        raise ValueError("nx, ny, nz must be >= 1")
+    tris = np.asarray(triangles, dtype=np.float64)
+    if bounds is None:
+        lo, hi = stl_bbox(tris)
+        bounds = (
+            (float(lo[0]) - pad, float(hi[0]) + pad),
+            (float(lo[1]) - pad, float(hi[1]) + pad),
+            (float(lo[2]) - pad, float(hi[2]) + pad),
+        )
+    (x0, x1), (y0, y1), (z0, z1) = bounds
+    magnetization = np.asarray(magnetization, dtype=float).reshape(3)
+
+    corners_full, dens_full = cube_mesh(
+        (x0, x1, nx),
+        (y0, y1, ny),
+        (z0, z1, nz),
+        magnetization=magnetization,
+    )
+    xs = np.linspace(x0, x1, nx + 1)
+    ys = np.linspace(y0, y1, ny + 1)
+    zs = np.linspace(z0, z1, nz + 1)
+    xs_c = 0.5 * (xs[:-1] + xs[1:])
+    ys_c = 0.5 * (ys[:-1] + ys[1:])
+    zs_c = 0.5 * (zs[:-1] + zs[1:])
+
+    zmin = tris[:, :, 2].min(axis=1)
+    zmax = tris[:, :, 2].max(axis=1)
+    inside = np.zeros(nx * ny * nz, dtype=bool)
+    for zi, zc in enumerate(zs_c):
+        segs = talwani_slice_segments(tris, float(zc), zmin=zmin, zmax=zmax)
+        layer = _raster_inside_xy(xs_c, ys_c, segs)
+        # cube_mesh order: zi slow, yi, xi fast  →  yi rows, xi cols
+        inside[zi * ny * nx : (zi + 1) * ny * nx] = layer.ravel()
+    if not np.any(inside):
+        raise ValueError(
+            "talwani_mesh_stl: no cell centers inside the STL slices; "
+            "check that the surface is closed, or refine/pad the grid"
+        )
+    corners = corners_full[inside]
+    dens = dens_full[inside]
+    kappa_arr = np.full(corners.shape[0], float(kappa), dtype=float)
+    return corners, dens, kappa_arr
+
+
 def voxelize_stl(
     triangles: np.ndarray,
     nx: int,
@@ -456,11 +634,22 @@ def stl_to_hex_model(
     pad: float = 0.0,
     center: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Read STL and build a volumetric hex model (``voxel``, ``polar``, or ``cubed-sphere``)."""
+    """Read STL and build a volumetric hex model (``voxel``, ``talwani``, ``polar``, or ``cubed-sphere``)."""
     tris = read_stl(stl_path)
     method = method.lower().strip().replace("_", "-")
     if method == "voxel":
         return voxelize_stl(
+            tris,
+            nx,
+            ny,
+            nz,
+            magnetization,
+            kappa,
+            bounds=bounds,
+            pad=pad,
+        )
+    if method == "talwani":
+        return talwani_mesh_stl(
             tris,
             nx,
             ny,
@@ -489,7 +678,7 @@ def stl_to_hex_model(
             kappa,
             center=center,
         )
-    raise ValueError(f"Unknown meshing method {method!r}; use voxel|polar|cubed-sphere")
+    raise ValueError(f"Unknown meshing method {method!r}; use voxel|talwani|polar|cubed-sphere")
 
 
 def convert_stl_to_vtu(
@@ -534,7 +723,8 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=(
             "Convert a closed STL surface to a GRAFEN hex VTU. "
-            "Default: AABB voxel fill. --polar: lat/lon radial hexes. "
+            "Default: AABB voxel fill (3D ray test). --talwani: same grid, "
+            "horizontal slices (fast on large STLs). --polar: lat/lon radial hexes. "
             "--cubed-sphere: inner equal cube + 6-face radial shells to the surface."
         ),
     )
@@ -561,6 +751,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Magnetization I (alternative to -H; default 0 if neither given)",
     )
     p.add_argument(
+        "--talwani",
+        action="store_true",
+        help="Talwani stacked prisms: XY fill of horizontal STL slices (uses --nx/--ny/--nz)",
+    )
+    p.add_argument(
         "--polar",
         action="store_true",
         help="Polar meshing from geometric center (star-convex bodies)",
@@ -571,9 +766,9 @@ def main(argv: list[str] | None = None) -> int:
         dest="cubed_sphere",
         help="Cubed-sphere meshing: inner cube + radial shells (star-convex bodies)",
     )
-    p.add_argument("--nx", type=int, default=16, help="voxel: cells along X (default 16)")
-    p.add_argument("--ny", type=int, default=16, help="voxel: cells along Y (default 16)")
-    p.add_argument("--nz", type=int, default=16, help="voxel: cells along Z (default 16)")
+    p.add_argument("--nx", type=int, default=16, help="voxel/talwani: cells along X (default 16)")
+    p.add_argument("--ny", type=int, default=16, help="voxel/talwani: cells along Y (default 16)")
+    p.add_argument("--nz", type=int, default=16, help="voxel/talwani: Z layers / cells (default 16)")
     p.add_argument("--nl", type=int, default=16, help="polar: longitude cells (default 16)")
     p.add_argument("--nb", type=int, default=8, help="polar: latitude cells (default 8)")
     p.add_argument("--nr", type=int, default=4, help="polar/cubed-sphere: radial shells (default 4)")
@@ -599,13 +794,13 @@ def main(argv: list[str] | None = None) -> int:
         nargs=6,
         default=None,
         metavar=("x0", "x1", "y0", "y1", "z0", "z1"),
-        help="voxel: AABB override (default: STL bbox)",
+        help="voxel/talwani: AABB override (default: STL bbox)",
     )
     p.add_argument(
         "--pad",
         type=float,
         default=0.0,
-        help="voxel: expand STL bbox by this amount on each side",
+        help="voxel/talwani: expand STL bbox by this amount on each side",
     )
     args = p.parse_args(argv)
 
@@ -623,13 +818,16 @@ def main(argv: list[str] | None = None) -> int:
     else:
         magnetization = np.zeros(3)
 
-    if args.polar and args.cubed_sphere:
-        p.error("use either --polar or --cubed-sphere, not both")
+    nflags = int(args.polar) + int(args.cubed_sphere) + int(args.talwani)
+    if nflags > 1:
+        p.error("use only one of --polar, --cubed-sphere, --talwani")
     center = None if args.center is None else np.array(args.center, dtype=float)
     if args.cubed_sphere:
         method = "cubed-sphere"
     elif args.polar:
         method = "polar"
+    elif args.talwani:
+        method = "talwani"
     else:
         method = "voxel"
     corners, dens, kappa = convert_stl_to_vtu(
